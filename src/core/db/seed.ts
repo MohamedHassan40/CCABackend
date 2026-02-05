@@ -814,14 +814,20 @@ async function main() {
   console.log('👤 Creating super admin user...');
 
   const { hashPassword } = await import('../auth/password');
-  const defaultPassword = await hashPassword('admin123');
-  
+  const superAdminEmail = process.env.SUPER_ADMIN_EMAIL || 'info@cloud.org.sa';
+  const superAdminPassword = process.env.SUPER_ADMIN_PASSWORD || '123456';
+  const superAdminPasswordHash = await hashPassword(superAdminPassword);
+
   const superAdmin = await prisma.user.upsert({
-    where: { email: 'admin@cca.com' },
-    update: { isSuperAdmin: true },
+    where: { email: superAdminEmail },
+    update: {
+      isSuperAdmin: true,
+      isActive: true,
+      passwordHash: superAdminPasswordHash,
+    },
     create: {
-      email: 'admin@cca.com',
-      passwordHash: defaultPassword,
+      email: superAdminEmail,
+      passwordHash: superAdminPasswordHash,
       name: 'Platform Admin',
       isSuperAdmin: true,
       isActive: true,
@@ -841,8 +847,8 @@ async function main() {
   });
 
   console.log('✅ Created super admin (no organization):');
-  console.log('   Email: admin@cca.com');
-  console.log('   Password: admin123');
+  console.log(`   Email: ${superAdminEmail}`);
+  console.log('   Password: (set via SUPER_ADMIN_PASSWORD env, or default 123456)');
   console.log('   Role: Platform-level control (pricing, bundles, organizations, modules)\n');
 
   // ============================================
