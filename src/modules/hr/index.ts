@@ -150,7 +150,7 @@ router.post('/employees', requirePermission('hr.employees.create'), async (req, 
     });
 
     // Check employee limit
-    if (organization?.maxEmployees !== null && organization.maxEmployees !== undefined) {
+    if (organization != null && organization.maxEmployees != null && organization.maxEmployees !== undefined) {
       const currentEmployeeCount = await prisma.employee.count({
         where: { orgId: req.org.id },
       });
@@ -166,7 +166,7 @@ router.post('/employees', requirePermission('hr.employees.create'), async (req, 
 
     // Check user limit if creating user account
     if (createUserAccount && email && password) {
-      if (organization?.maxUsers !== null && organization.maxUsers !== undefined) {
+      if (organization != null && organization.maxUsers != null && organization.maxUsers !== undefined) {
         const currentUserCount = await prisma.membership.count({
           where: {
             organizationId: req.org.id,
@@ -443,7 +443,7 @@ router.post('/employees/bulk', requirePermission('hr.employees.create'), async (
     });
 
     // Check employee limit for bulk add
-    if (organization?.maxEmployees !== null && organization.maxEmployees !== undefined) {
+    if (organization != null && organization.maxEmployees != null && organization.maxEmployees !== undefined) {
       const currentEmployeeCount = await prisma.employee.count({
         where: { orgId: req.org.id },
       });
@@ -462,7 +462,7 @@ router.post('/employees/bulk', requirePermission('hr.employees.create'), async (
 
     // Check user limit for employees that will create user accounts
     const employeesWithAccounts = employees.filter((emp) => emp.email && emp.password);
-    if (employeesWithAccounts.length > 0 && organization) {
+    if (employeesWithAccounts.length > 0 && organization != null) {
       if (organization.maxUsers !== null && organization.maxUsers !== undefined) {
         const currentUserCount = await prisma.membership.count({
           where: {

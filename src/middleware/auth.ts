@@ -10,6 +10,7 @@ declare global {
       user?: {
         id: string;
         email: string;
+        name?: string | null;
         isSuperAdmin: boolean;
       };
       org?: {
@@ -50,6 +51,7 @@ export async function authMiddleware(
     req.user = {
       id: user.id,
       email: user.email,
+      name: user.name ?? undefined,
       isSuperAdmin: user.isSuperAdmin,
     };
     req.jwtPayload = payload;
@@ -62,6 +64,10 @@ export async function authMiddleware(
     }
 
     // Regular users require valid org
+    if (payload.orgId == null || typeof payload.orgId !== 'string') {
+      res.status(401).json({ error: 'Invalid organization context' });
+      return;
+    }
     const org = await prisma.organization.findUnique({
       where: { id: payload.orgId },
     });

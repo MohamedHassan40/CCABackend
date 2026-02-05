@@ -20,28 +20,28 @@ router.post('/create-sample-data', async (req: Request, res: Response) => {
     // Create sample employees
     const sampleEmployees = [
       {
-        name: 'Ahmed Al-Saud',
+        fullName: 'Ahmed Al-Saud',
         email: 'ahmed@example.com',
         position: 'Software Engineer',
         department: 'Engineering',
         phone: '+966501234567',
-        organizationId: orgId,
+        organization: { connect: { id: orgId } },
       },
       {
-        name: 'Fatima Al-Rashid',
+        fullName: 'Fatima Al-Rashid',
         email: 'fatima@example.com',
         position: 'HR Manager',
         department: 'Human Resources',
         phone: '+966501234568',
-        organizationId: orgId,
+        organization: { connect: { id: orgId } },
       },
       {
-        name: 'Mohammed Al-Zahrani',
+        fullName: 'Mohammed Al-Zahrani',
         email: 'mohammed@example.com',
         position: 'Sales Manager',
         department: 'Sales',
         phone: '+966501234569',
-        organizationId: orgId,
+        organization: { connect: { id: orgId } },
       },
     ];
 
@@ -67,7 +67,7 @@ router.post('/create-sample-data', async (req: Request, res: Response) => {
         description: 'This is a sample ticket to help you get started. You can create, assign, and track tickets here.',
         status: 'open',
         priority: 'medium',
-        organizationId: orgId,
+        orgId,
         createdById: req.user.id,
       },
       {
@@ -75,7 +75,7 @@ router.post('/create-sample-data', async (req: Request, res: Response) => {
         description: 'This is an example of a high priority ticket.',
         status: 'in_progress',
         priority: 'high',
-        organizationId: orgId,
+        orgId,
         createdById: req.user.id,
       },
     ];
@@ -111,7 +111,7 @@ router.post('/create-sample-data', async (req: Request, res: Response) => {
           currency: 'SAR',
           sku: 'SAMPLE-001',
           stockQuantity: 100,
-          organizationId: orgId,
+          organization: { connect: { id: orgId } },
         },
         {
           name: 'Sample Product 2',
@@ -120,7 +120,7 @@ router.post('/create-sample-data', async (req: Request, res: Response) => {
           currency: 'SAR',
           sku: 'SAMPLE-002',
           stockQuantity: 50,
-          organizationId: orgId,
+          organization: { connect: { id: orgId } },
         },
       ];
 

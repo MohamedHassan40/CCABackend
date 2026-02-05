@@ -174,7 +174,7 @@ router.get('/overview', requireSuperAdmin, async (req: Request, res: Response) =
       },
       totalRevenue: Object.values(revenueByMonth).reduce((sum, amount) => sum + amount, 0) / 100,
       mrr: subscriptions.reduce((sum, sub) => {
-        const modulePrice = sub.module?.modulePrices?.[0];
+        const modulePrice = (sub.module as { modulePrices?: { plan: string; priceCents: number }[] } | null)?.modulePrices?.[0];
         if (modulePrice && sub.plan === modulePrice.plan) {
           return sum + (modulePrice.priceCents / 100);
         }

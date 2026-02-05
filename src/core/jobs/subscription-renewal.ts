@@ -266,13 +266,14 @@ async function attemptRenewal(subscription: any): Promise<RenewalResult> {
       }
     } else {
       // No payment gateway, extend subscription manually (for testing)
+      const nowDate = new Date();
       const newPeriodEnd = new Date();
       newPeriodEnd.setMonth(newPeriodEnd.getMonth() + 1);
 
       await prisma.subscription.update({
         where: { id: subscription.id },
         data: {
-          currentPeriodStart: now,
+          currentPeriodStart: nowDate,
           currentPeriodEnd: newPeriodEnd,
         },
       });

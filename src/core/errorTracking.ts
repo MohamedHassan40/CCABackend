@@ -24,7 +24,7 @@ export function initErrorTracking() {
       dsn,
       environment: process.env.NODE_ENV || 'development',
       tracesSampleRate: process.env.NODE_ENV === 'production' ? 0.1 : 1.0,
-      beforeSend(event) {
+      beforeSend(event: any) {
         // Don't send errors in development
         if (process.env.NODE_ENV === 'development') {
           return null;

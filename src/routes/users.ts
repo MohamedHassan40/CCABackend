@@ -81,7 +81,7 @@ router.post('/', authMiddleware, requirePermission('users.create'), async (req: 
       select: { maxUsers: true },
     });
 
-    if (organization?.maxUsers !== null && organization.maxUsers !== undefined) {
+    if (organization != null && organization.maxUsers != null && organization.maxUsers !== undefined) {
       const currentUserCount = await prisma.membership.count({
         where: {
           organizationId: req.org.id,

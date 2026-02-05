@@ -1218,7 +1218,7 @@ router.post('/cart/checkout', requirePermission('marketplace.orders.create'), as
         status: 'pending',
         totalCents,
         currency: 'SAR',
-        customerName: customerName || req.user.name || null,
+        customerName: customerName || (req.user as { name?: string | null }).name || null,
         customerEmail: customerEmail || req.user.email || null,
         customerPhone: customerPhone || null,
         shippingAddress: shippingAddress || null,

@@ -959,7 +959,7 @@ router.post('/conversations/:id/messages', requirePermission('membership.message
     // Determine sender info
     const isAdmin = senderType === 'admin' || req.user.isSuperAdmin;
     const messageSenderEmail = isAdmin ? req.user.email : (senderEmail || conversation.memberEmail);
-    const messageSenderName = isAdmin ? (req.user.name || req.user.email) : (senderName || conversation.memberName);
+    const messageSenderName = isAdmin ? ((req.user as { name?: string | null }).name || req.user.email) : (senderName || conversation.memberName);
 
     const message = await prisma.message.create({
       data: {

@@ -556,7 +556,7 @@ router.post('/projects/:id/client-managers', requirePermission('pmo.client_manag
       select: { maxUsers: true },
     });
 
-    if (organization?.maxUsers !== null && organization.maxUsers !== undefined) {
+    if (organization != null && organization.maxUsers != null && organization.maxUsers !== undefined) {
       const currentUserCount = await prisma.membership.count({
         where: {
           organizationId: req.org.id,

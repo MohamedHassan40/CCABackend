@@ -4,8 +4,8 @@ import type { JWTPayload } from '@cloud-org/shared';
 
 export function signToken(payload: Omit<JWTPayload, 'sub'> & { sub: string }): string {
   return jwt.sign(payload, config.jwtSecret, {
-    expiresIn: config.jwtExpiresIn,
-  });
+    expiresIn: config.jwtExpiresIn as string,
+  } as jwt.SignOptions);
 }
 
 export function verifyToken(token: string): JWTPayload {

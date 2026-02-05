@@ -129,6 +129,10 @@ router.delete('/:id', async (req: Request, res: Response) => {
     }
 
     // Delete file from storage
+    if (!file.storageKey) {
+      res.status(400).json({ error: 'File has no storage key' });
+      return;
+    }
     await storageService.deleteFile(file.storageKey, file.storageType);
 
     // Delete database record

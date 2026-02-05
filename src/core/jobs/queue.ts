@@ -27,7 +27,7 @@ export async function initJobQueue() {
     // Create email worker
     emailWorker = new Worker(
       'email',
-      async (job) => {
+      async (job: { data: any }) => {
         const { sendEmail } = await import('../email');
         await sendEmail(job.data);
       },
@@ -35,12 +35,12 @@ export async function initJobQueue() {
     );
 
     // Handle job events
-    emailWorker.on('completed', (job) => {
+    emailWorker.on('completed', (job: { id?: string }) => {
       console.log(`Email job ${job.id} completed`);
     });
 
-    emailWorker.on('failed', (job, err) => {
-      console.error(`Email job ${job.id} failed:`, err);
+    emailWorker.on('failed', (job: { id?: string } | undefined, err: Error) => {
+      console.error(`Email job ${job?.id} failed:`, err);
     });
 
     console.log('Job queue initialized successfully');
@@ -58,8 +58,15 @@ export function getEmailQueue(): Queue | null {
 export async function addEmailJob(data: any, options?: { priority?: number; delay?: number }) {
   if (!emailQueue) {
     // Fallback to in-memory queue if Redis not available
-    const { addEmailToQueue } = await import('../email/queue');
-    addEmailToQueue(data);
+    const { queueEmail } = await import('../email/queue');
+    await queueEmail({
+      to: data.to,
+      subject: data.subject,
+      html: data.html || '',
+      text: data.text,
+      from: data.from,
+      priority: 'normal',
+    });
     return;
   }
 

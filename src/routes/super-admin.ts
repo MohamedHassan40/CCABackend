@@ -92,6 +92,7 @@ router.get('/organizations/:id', async (req: Request, res: Response) => {
     const organization = await prisma.organization.findUnique({
       where: { id },
       include: {
+        currentBundle: true,
         memberships: {
           where: { isActive: true },
           include: {
