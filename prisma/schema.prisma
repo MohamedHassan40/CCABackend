@@ -1,0 +1,1981 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "linux-musl-openssl-3.0.x"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================
+// CORE MODELS
+// ============================================
+
+model User {
+  id                   String    @id @default(cuid())
+  email                String    @unique
+  passwordHash         String
+  name                 String?
+  isActive             Boolean   @default(true)
+  isSuperAdmin         Boolean   @default(false) // platform-level super admin
+  passwordResetToken   String? // Token for password reset
+  passwordResetExpires DateTime? // Expiration date for reset token
+
+  memberships            Membership[]
+  createdTickets         Ticket[]               @relation("CreatedBy")
+  assignedTickets        Ticket[]               @relation("AssignedTo")
+  employees              Employee[]
+  notifications          Notification[]
+  auditLogs              AuditLog[]
+  files                  File[]
+  ticketComments         TicketComment[]
+  productReviews         ProductReview[]
+  carts                  Cart[]
+  approvedLeaves         LeaveRequest[]         @relation("ApprovedLeaves")
+  conductedReviews       PerformanceReview[]    @relation("ConductedReviews")
+  requestedAssignments   InventoryAssignment[]  @relation("RequestedAssignments")
+  approvedAssignments    InventoryAssignment[]  @relation("ApprovedAssignments")
+  processedReturns       InventoryReturn[]      @relation("ProcessedReturns")
+  reportedDamages        InventoryDamage[]      @relation("ReportedDamages")
+  reviewedDamages        InventoryDamage[]      @relation("ReviewedDamages")
+  requestedSwaps         InventorySwap[]        @relation("RequestedSwaps")
+  approvedSwaps          InventorySwap[]        @relation("ApprovedSwaps")
+  clientProjectManagers  ClientProjectManager[]
+  documentCreated        Document[]             @relation("DocumentCreatedBy")
+  assignedTasks          Task[]                 @relation("TaskAssignedBy")
+  documentUpdated        Document[]             @relation("DocumentUpdatedBy")
+  folderCreated          DocumentFolder[]       @relation("FolderCreatedBy")
+  documentSharedWith     DocumentShare[]        @relation("DocumentSharedWith")
+  documentSharedBy       DocumentShare[]        @relation("DocumentSharedBy")
+  activityAssignedTo     SalesActivity[]        @relation("ActivityAssignedTo")
+  activityCreatedBy      SalesActivity[]        @relation("ActivityCreatedBy")
+  membershipCreatedBy    MemberMembership[]     @relation("MembershipCreatedBy")
+  announcementCreatedBy  Announcement[]         @relation("AnnouncementCreatedBy")
+  conversationAssignedTo Conversation[]         @relation("ConversationAssignedTo")
+  absenceDeductionDecisions AbsenceDeductionDecision[] @relation("DeductionDecisionCreatedBy")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Organization {
+  id                 String  @id @default(cuid())
+  name               String
+  slug               String  @unique
+  isActive           Boolean @default(true)
+  status             String  @default("active") // "pending", "active", "suspended"
+  industry           String?
+  companySize        String? // "1-10", "11-50", "51-200", "201-500", "500+"
+  signupSource       String  @default("self-service") // "self-service", "admin-created"
+  maxUsers           Int? // Maximum number of users allowed (null = unlimited)
+  maxEmployees       Int? // Maximum number of HR employees allowed (null = unlimited)
+  expiresAt         DateTime? // Organization-level subscription/contract expiry (null = no expiry)
+  currentBundleId    String? // Assigned package/bundle (drives optional limits and display)
+  storefrontSettings Json? // Storefront customization settings (hero, sections, etc.)
+
+  currentBundle      Bundle?         @relation("OrganizationCurrentBundle", fields: [currentBundleId], references: [id], onDelete: SetNull)
+  memberships        Membership[]
+  orgModules        OrgModule[]
+  subscriptions     Subscription[]
+  payments          Payment[]
+  employees         Employee[]
+  tickets           Ticket[]
+  products          Product[]
+  productCategories ProductCategory[]
+  orders            Order[]
+  notifications     Notification[]
+  auditLogs         AuditLog[]
+  files             File[]
+
+  createdAt           DateTime              @default(now())
+  updatedAt           DateTime              @updatedAt
+  TicketCategory      TicketCategory[]
+  Cart                Cart[]
+  LeaveType           LeaveType[]
+  LeaveRequest        LeaveRequest[]
+  LeaveBalance        LeaveBalance[]
+  AttendanceRecord    AttendanceRecord[]
+  PayrollRecord       PayrollRecord[]
+  JobPosting          JobPosting[]
+  JobApplication      JobApplication[]
+  PerformanceReview   PerformanceReview[]
+  Goal                Goal[]
+  InventoryItem       InventoryItem[]
+  InventoryCategory   InventoryCategory[]
+  InventoryAssignment InventoryAssignment[]
+  InventoryReturn     InventoryReturn[]
+  InventoryDamage     InventoryDamage[]
+  InventorySwap       InventorySwap[]
+  projects            Project[]
+  documents           Document[]
+  documentFolders     DocumentFolder[]
+  documentCategories  DocumentCategory[]
+  accounts            Account[]
+  contacts            Contact[]
+  leads               Lead[]
+  opportunities       Opportunity[]
+  quotes              Quote[]
+  salesActivities     SalesActivity[]
+  membershipTypes     MembershipType[]
+  memberMemberships   MemberMembership[]
+  announcements       Announcement[]
+  conversations       Conversation[]
+  tasks               Task[]
+  taskTrackers        TaskTracker[]
+  calendarEvents      CalendarEvent[]
+  absenceDeductionDecisions AbsenceDeductionDecision[]
+
+  @@index([status])
+  @@index([isActive])
+}
+
+model Membership {
+  id             String  @id @default(cuid())
+  userId         String
+  organizationId String
+  isActive       Boolean @default(true)
+
+  user            User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization    Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  membershipRoles MembershipRole[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId, organizationId])
+}
+
+model MembershipRole {
+  id           String @id @default(cuid())
+  membershipId String
+  roleId       String
+
+  membership Membership @relation(fields: [membershipId], references: [id], onDelete: Cascade)
+  role       Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@unique([membershipId, roleId])
+}
+
+model Role {
+  id             String  @id @default(cuid())
+  key            String  @unique // e.g. "owner", "admin", "hr_manager"
+  name           String
+  organizationId String? // null for global roles
+  description    String?
+
+  membershipRoles MembershipRole[]
+  rolePermissions RolePermission[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Permission {
+  id          String  @id @default(cuid())
+  key         String  @unique // e.g. "hr.employees.view", "tickets.create"
+  name        String
+  description String?
+
+  rolePermissions RolePermission[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model RolePermission {
+  id           String @id @default(cuid())
+  roleId       String
+  permissionId String
+
+  role       Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@unique([roleId, permissionId])
+}
+
+// ============================================
+// MODULE SYSTEM
+// ============================================
+
+model Module {
+  id          String  @id @default(cuid())
+  key         String  @unique // "hr", "ticketing", "inventory", etc.
+  name        String
+  description String?
+  isActive    Boolean @default(true)
+
+  orgModules    OrgModule[]
+  modulePrices  ModulePrice[]
+  subscriptions Subscription[]
+  bundleModules BundleModule[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model OrgModule {
+  id             String    @id @default(cuid())
+  organizationId String
+  moduleId       String
+  isEnabled      Boolean   @default(false)
+  plan           String? // e.g. "basic", "pro", "enterprise"
+  seats          Int? // number of licensed seats/users
+  expiresAt      DateTime? // when subscription ends
+  trialEndsAt    DateTime? // when trial ends (if any)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  module       Module       @relation(fields: [moduleId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([organizationId, moduleId])
+}
+
+// ============================================
+// BILLING MODELS
+// ============================================
+
+model ModulePrice {
+  id            String @id @default(cuid())
+  moduleId      String
+  plan          String // "basic", "pro", etc.
+  priceCents    Int
+  currency      String @default("SAR") // Only SAR (Saudi Riyal) supported
+  billingPeriod String // "monthly", "yearly"
+  maxSeats      Int? // Maximum number of users/seats for this plan (null = unlimited)
+
+  module Module @relation(fields: [moduleId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([moduleId, plan, billingPeriod])
+}
+
+model Bundle {
+  id                 String  @id @default(cuid())
+  name               String
+  description        String?
+  priceCents         Int
+  currency           String  @default("SAR")
+  billingPeriod      String  @default("monthly") // "monthly", "yearly"
+  isActive           Boolean @default(true)
+  discountPercentage Int? // Optional discount percentage
+  maxUsers           Int? // Default max users when assigned to org (null = leave org limit unchanged)
+  maxEmployees       Int? // Default max employees when assigned to org (null = leave org limit unchanged)
+
+  bundleModules     BundleModule[]
+  organizations     Organization[] @relation("OrganizationCurrentBundle")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model BundleModule {
+  id       String @id @default(cuid())
+  bundleId String
+  moduleId String
+  plan     String // "basic", "pro", etc.
+
+  bundle Bundle @relation(fields: [bundleId], references: [id], onDelete: Cascade)
+  module Module @relation(fields: [moduleId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@unique([bundleId, moduleId])
+  @@index([bundleId])
+  @@index([moduleId])
+}
+
+model Subscription {
+  id                 String    @id @default(cuid())
+  organizationId     String
+  moduleId           String
+  plan               String
+  seats              Int?
+  status             String // "active", "expired", "canceled", "trial", "pending_cancellation"
+  currentPeriodStart DateTime
+  currentPeriodEnd   DateTime
+  trialEndsAt        DateTime?
+  canceledAt         DateTime? // When subscription was canceled
+  cancelAtPeriodEnd  Boolean   @default(false) // Cancel at end of billing period
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  module       Module       @relation(fields: [moduleId], references: [id], onDelete: Cascade)
+  payments     Payment[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([organizationId])
+  @@index([status])
+}
+
+model Payment {
+  id             String    @id @default(cuid())
+  organizationId String
+  moduleId       String?
+  subscriptionId String? // Link to subscription if applicable
+  amountCents    Int
+  currency       String    @default("SAR")
+  status         String // "pending", "succeeded", "failed", "refunded"
+  provider       String // "moyasar", "stripe", "manual"
+  providerRef    String? // payment id from provider
+  invoiceUrl     String? // URL to invoice/receipt
+  paidAt         DateTime? // When payment was completed
+
+  organization Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  subscription Subscription? @relation(fields: [subscriptionId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([organizationId])
+  @@index([status])
+  @@index([createdAt])
+}
+
+// ============================================
+// MODULE-SPECIFIC MODELS
+// ============================================
+
+// HR Module
+model Employee {
+  id             String    @id @default(cuid())
+  orgId          String
+  fullName       String
+  email          String?
+  position       String?
+  department     String?
+  userId         String? // Link to User account if created
+  photoUrl       String? // Profile picture URL
+  phone          String?
+  hireDate       DateTime?
+  notes          String? // Additional notes about employee
+  salary         Int? // Monthly salary in cents
+  employmentType String? // "full_time", "part_time", "contract", "intern", "volunteer"
+
+  organization         Organization          @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  user                 User?                 @relation(fields: [userId], references: [id], onDelete: SetNull)
+  documents            File[]                @relation("EmployeeDocuments")
+  leaveRequests        LeaveRequest[]
+  leaveBalances        LeaveBalance[]
+  attendanceRecords    AttendanceRecord[]
+  payrollRecords       PayrollRecord[]
+  jobApplications      JobApplication[]
+  performanceReviews   PerformanceReview[]
+  goals                Goal[]
+  inventoryAssignments InventoryAssignment[]
+  inventoryReturns     InventoryReturn[]
+  inventoryDamages     InventoryDamage[]
+  inventorySwaps       InventorySwap[]
+  projectManagers      ProjectManager[]
+  tasks                Task[]
+  taskTrackers         TaskTracker[]
+  calendarEvents       CalendarEvent[]
+  absenceDeductionDecisions AbsenceDeductionDecision[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([orgId])
+  @@index([userId])
+}
+
+// HR Decisions - Absence/Delay Deduction
+model AbsenceDeductionDecision {
+  id          String   @id @default(cuid())
+  orgId       String
+  employeeId  String
+  decisionDate DateTime @db.Date
+  reason      String   // "absence" | "attendance_violation"
+  createdById String?
+
+  organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  employee     Employee     @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  createdBy    User?        @relation("DeductionDecisionCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([orgId])
+  @@index([employeeId])
+  @@index([decisionDate])
+}
+
+// Leave Management
+model LeaveType {
+  id               String  @id @default(cuid())
+  orgId            String
+  name             String
+  description      String?
+  maxDays          Int? // Maximum days allowed per year (null = unlimited)
+  isPaid           Boolean @default(true)
+  requiresApproval Boolean @default(true)
+  isActive         Boolean @default(true)
+
+  organization  Organization   @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  leaveRequests LeaveRequest[]
+  leaveBalances LeaveBalance[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([orgId, name])
+  @@index([orgId])
+}
+
+model LeaveRequest {
+  id              String    @id @default(cuid())
+  orgId           String
+  employeeId      String
+  leaveTypeId     String
+  startDate       DateTime
+  endDate         DateTime
+  days            Int // Calculated number of days
+  reason          String?
+  status          String    @default("pending") // "pending", "approved", "rejected", "cancelled"
+  approvedById    String?
+  approvedAt      DateTime?
+  rejectionReason String?
+
+  organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  employee     Employee     @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  leaveType    LeaveType    @relation(fields: [leaveTypeId], references: [id], onDelete: Cascade)
+  approvedBy   User?        @relation("ApprovedLeaves", fields: [approvedById], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([orgId])
+  @@index([employeeId])
+  @@index([status])
+  @@index([startDate, endDate])
+}
+
+model LeaveBalance {
+  id            String @id @default(cuid())
+  orgId         String
+  employeeId    String
+  leaveTypeId   String
+  year          Int
+  totalDays     Int    @default(0)
+  usedDays      Int    @default(0)
+  remainingDays Int    @default(0)
+
+  organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  employee     Employee     @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  leaveType    LeaveType    @relation(fields: [leaveTypeId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([employeeId, leaveTypeId, year])
+  @@index([orgId])
+  @@index([employeeId])
+}
+
+// Attendance Tracking
+model AttendanceRecord {
+  id            String    @id @default(cuid())
+  orgId         String
+  employeeId    String
+  date          DateTime  @db.Date
+  clockIn       DateTime?
+  clockOut      DateTime?
+  breakDuration Int? // Minutes
+  totalHours    Float? // Calculated hours worked
+  status        String    @default("present") // "present", "absent", "late", "half_day", "holiday"
+  notes         String?
+
+  organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  employee     Employee     @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([employeeId, date])
+  @@index([orgId])
+  @@index([employeeId])
+  @@index([date])
+}
+
+// Payroll Management
+model PayrollRecord {
+  id             String    @id @default(cuid())
+  orgId          String
+  employeeId     String
+  payPeriodStart DateTime
+  payPeriodEnd   DateTime
+  baseSalary     Int // In cents
+  allowances     Int       @default(0) // In cents
+  deductions     Int       @default(0) // In cents
+  taxAmount      Int       @default(0) // In cents
+  netSalary      Int // In cents (baseSalary + allowances - deductions - taxAmount)
+  currency       String    @default("SAR")
+  status         String    @default("draft") // "draft", "approved", "paid"
+  paidAt         DateTime?
+  payslipUrl     String?
+
+  organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  employee     Employee     @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([orgId])
+  @@index([employeeId])
+  @@index([payPeriodStart, payPeriodEnd])
+}
+
+// Recruitment
+model JobPosting {
+  id             String    @id @default(cuid())
+  orgId          String
+  title          String
+  description    String?
+  department     String?
+  position       String?
+  location       String?
+  employmentType String? // "full_time", "part_time", "contract", "intern"
+  salaryRange    String? // e.g., "5000-10000 SAR"
+  requirements   String? // Job requirements
+  status         String    @default("draft") // "draft", "published", "closed", "filled"
+  publishedAt    DateTime?
+  closedAt       DateTime?
+
+  organization Organization     @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  applications JobApplication[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([orgId])
+  @@index([status])
+}
+
+model JobApplication {
+  id             String    @id @default(cuid())
+  orgId          String
+  jobPostingId   String
+  employeeId     String? // If internal employee applied
+  applicantName  String
+  applicantEmail String
+  applicantPhone String?
+  resumeUrl      String?
+  coverLetter    String?
+  status         String    @default("applied") // "applied", "screening", "interview", "offer", "hired", "rejected"
+  interviewDate  DateTime?
+  interviewNotes String?
+  rating         Int? // 1-5 rating
+  notes          String?
+
+  organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  jobPosting   JobPosting   @relation(fields: [jobPostingId], references: [id], onDelete: Cascade)
+  employee     Employee?    @relation(fields: [employeeId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([orgId])
+  @@index([jobPostingId])
+  @@index([status])
+}
+
+// Performance Management
+model PerformanceReview {
+  id                  String    @id @default(cuid())
+  orgId               String
+  employeeId          String
+  reviewPeriodStart   DateTime
+  reviewPeriodEnd     DateTime
+  reviewType          String    @default("annual") // "annual", "quarterly", "monthly", "probation"
+  overallRating       Int? // 1-5
+  strengths           String?
+  areasForImprovement String?
+  goals               String?
+  reviewerId          String? // User who conducted the review
+  reviewedAt          DateTime?
+  status              String    @default("draft") // "draft", "in_progress", "completed", "acknowledged"
+  employeeComments    String?
+
+  organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  employee     Employee     @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  reviewer     User?        @relation("ConductedReviews", fields: [reviewerId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([orgId])
+  @@index([employeeId])
+  @@index([reviewPeriodStart, reviewPeriodEnd])
+}
+
+model Goal {
+  id          String    @id @default(cuid())
+  orgId       String
+  employeeId  String
+  title       String
+  description String?
+  targetDate  DateTime
+  status      String    @default("not_started") // "not_started", "in_progress", "completed", "cancelled"
+  progress    Int       @default(0) // 0-100 percentage
+  completedAt DateTime?
+  notes       String?
+
+  organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  employee     Employee     @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([orgId])
+  @@index([employeeId])
+  @@index([status])
+  @@index([targetDate])
+}
+
+// Ticketing Module
+model Ticket {
+  id          String  @id @default(cuid())
+  orgId       String
+  title       String
+  description String?
+  status      String  @default("open") // "open", "in_progress", "resolved", "closed"
+  priority    String  @default("medium") // "low", "medium", "high", "urgent"
+  categoryId  String? // Ticket category
+  createdById String
+  assigneeId  String?
+
+  organization Organization    @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  createdBy    User            @relation("CreatedBy", fields: [createdById], references: [id])
+  assignee     User?           @relation("AssignedTo", fields: [assigneeId], references: [id])
+  category     TicketCategory? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  comments     TicketComment[]
+  attachments  File[]          @relation("TicketAttachments")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([orgId])
+  @@index([status])
+  @@index([categoryId])
+}
+
+model TicketCategory {
+  id          String  @id @default(cuid())
+  orgId       String
+  name        String
+  description String?
+  color       String? // Hex color for UI
+  isActive    Boolean @default(true)
+
+  organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  tickets      Ticket[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([orgId, name])
+  @@index([orgId])
+}
+
+model TicketComment {
+  id         String  @id @default(cuid())
+  ticketId   String
+  userId     String
+  content    String
+  isInternal Boolean @default(false) // Internal note vs public comment
+
+  ticket Ticket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([ticketId])
+  @@index([userId])
+}
+
+// Marketplace Module
+model Product {
+  id            String  @id @default(cuid())
+  orgId         String
+  name          String
+  description   String?
+  priceCents    Int
+  currency      String  @default("SAR")
+  sku           String?
+  categoryId    String?
+  isActive      Boolean @default(true)
+  stockQuantity Int? // null means unlimited
+  weight        Float? // in kg
+  dimensions    String? // "LxWxH" format
+
+  organization Organization     @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  category     ProductCategory? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  orderItems   OrderItem[]
+  images       ProductImage[]
+  reviews      ProductReview[]
+  cartItems    CartItem[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([orgId])
+  @@index([categoryId])
+}
+
+model ProductImage {
+  id        String  @id @default(cuid())
+  productId String
+  imageUrl  String
+  altText   String?
+  isPrimary Boolean @default(false)
+  sortOrder Int     @default(0)
+
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@index([productId])
+}
+
+model ProductReview {
+  id           String  @id @default(cuid())
+  productId    String
+  userId       String? // null for anonymous reviews
+  customerName String? // For anonymous reviews
+  rating       Int // 1-5
+  comment      String?
+  isApproved   Boolean @default(false)
+
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  user    User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([productId])
+  @@index([userId])
+}
+
+model Cart {
+  id        String    @id @default(cuid())
+  orgId     String
+  userId    String? // null for guest carts
+  sessionId String? // For guest carts
+  expiresAt DateTime?
+
+  organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  user         User?        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  items        CartItem[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([orgId])
+  @@index([userId])
+  @@index([sessionId])
+}
+
+model CartItem {
+  id        String @id @default(cuid())
+  cartId    String
+  productId String
+  quantity  Int    @default(1)
+
+  cart    Cart    @relation(fields: [cartId], references: [id], onDelete: Cascade)
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([cartId, productId])
+  @@index([cartId])
+  @@index([productId])
+}
+
+model ProductCategory {
+  id          String  @id @default(cuid())
+  orgId       String
+  name        String
+  description String?
+  slug        String
+
+  organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  products     Product[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([orgId, slug])
+  @@index([orgId])
+}
+
+model Order {
+  id              String  @id @default(cuid())
+  orgId           String
+  orderNumber     String  @unique
+  status          String  @default("pending") // "pending", "processing", "shipped", "delivered", "cancelled"
+  totalCents      Int
+  currency        String  @default("SAR")
+  customerName    String?
+  customerEmail   String?
+  customerPhone   String?
+  shippingAddress String?
+
+  organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  orderItems   OrderItem[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([orgId])
+  @@index([status])
+  @@index([orderNumber])
+}
+
+model OrderItem {
+  id         String @id @default(cuid())
+  orderId    String
+  productId  String
+  quantity   Int
+  priceCents Int // price at time of order
+  currency   String @default("SAR")
+
+  order   Order   @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  product Product @relation(fields: [productId], references: [id])
+
+  createdAt DateTime @default(now())
+
+  @@index([orderId])
+  @@index([productId])
+}
+
+// ============================================
+// NOTIFICATIONS
+// ============================================
+
+model Notification {
+  id             String    @id @default(cuid())
+  userId         String
+  organizationId String?
+  type           String // "info", "success", "warning", "error"
+  title          String
+  message        String
+  link           String? // Optional link to related resource
+  isRead         Boolean   @default(false)
+  readAt         DateTime?
+
+  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+  @@index([organizationId])
+  @@index([isRead])
+  @@index([createdAt])
+}
+
+// ============================================
+// AUDIT LOGS
+// ============================================
+
+model AuditLog {
+  id             String  @id @default(cuid())
+  userId         String?
+  organizationId String?
+  action         String // "create", "update", "delete", "login", etc.
+  resourceType   String // "user", "employee", "ticket", "product", etc.
+  resourceId     String?
+  details        String? // JSON string with additional details
+  ipAddress      String?
+  userAgent      String?
+
+  user         User?         @relation(fields: [userId], references: [id], onDelete: SetNull)
+  organization Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([organizationId])
+  @@index([action])
+  @@index([resourceType])
+  @@index([createdAt])
+}
+
+// ============================================
+// FILE STORAGE
+// ============================================
+
+model File {
+  id              String  @id @default(cuid())
+  organizationId  String?
+  userId          String?
+  fileName        String
+  originalName    String
+  mimeType        String
+  size            Int // Size in bytes
+  url             String // URL to access the file
+  storageType     String  @default("local") // "local", "s3", "cloudinary"
+  storageKey      String? // Key in storage system
+  entityType      String? // "profile", "product", "ticket", "employee", "inventory", "document"
+  entityId        String? // ID of related entity
+  employeeId      String? // For employee documents
+  ticketId        String? // For ticket attachments
+  inventoryItemId String? // For inventory item images
+  folderId        String? // For document management folders
+  documentId      String? // For document management (main document record)
+  isVersion       Boolean @default(false) // If this is a version of a document
+  versionNumber   Int? // Version number
+  parentVersionId String? // Parent version ID for document versions
+
+  organization     Organization?     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user             User?             @relation(fields: [userId], references: [id], onDelete: SetNull)
+  employee         Employee?         @relation("EmployeeDocuments", fields: [employeeId], references: [id], onDelete: Cascade)
+  ticket           Ticket?           @relation("TicketAttachments", fields: [ticketId], references: [id], onDelete: Cascade)
+  inventoryItem    InventoryItem?    @relation("InventoryItemImages", fields: [inventoryItemId], references: [id], onDelete: Cascade)
+  projectDocuments ProjectDocument[] @relation("ProjectDocuments")
+  documentFolder   DocumentFolder?   @relation("FolderFiles", fields: [folderId], references: [id], onDelete: SetNull)
+  document         Document?         @relation("DocumentFiles", fields: [documentId], references: [id], onDelete: Cascade)
+  parentVersion    File?             @relation("DocumentVersions", fields: [parentVersionId], references: [id], onDelete: Cascade)
+  versions         File[]            @relation("DocumentVersions")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([organizationId])
+  @@index([userId])
+  @@index([entityType, entityId])
+  @@index([employeeId])
+  @@index([ticketId])
+  @@index([inventoryItemId])
+  @@index([folderId])
+  @@index([documentId])
+}
+
+// ============================================
+// INVENTORY MODULE
+// ============================================
+
+model InventoryItem {
+  id          String  @id @default(cuid())
+  orgId       String
+  name        String
+  description String?
+  sku         String? // Stock Keeping Unit
+  categoryId  String?
+  quantity    Int     @default(0) // Current stock quantity
+  minQuantity Int? // Minimum stock level (for alerts)
+  maxQuantity Int? // Maximum stock level
+  priceCents  Int? // Price per unit in cents
+  currency    String  @default("SAR")
+  location    String? // Storage location
+  supplier    String? // Supplier name
+  condition   String  @default("new") // "new", "used", "refurbished", "damaged"
+  status      String  @default("available") // "available", "assigned", "maintenance", "retired"
+  notes       String?
+
+  organization Organization          @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  category     InventoryCategory?    @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  images       File[]                @relation("InventoryItemImages")
+  assignments  InventoryAssignment[]
+  returns      InventoryReturn[]
+  damages      InventoryDamage[]
+  swaps        InventorySwap[]       @relation("SwapFromItem")
+  swapTargets  InventorySwap[]       @relation("SwapToItem")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([orgId])
+  @@index([categoryId])
+  @@index([status])
+  @@index([sku])
+}
+
+model InventoryCategory {
+  id          String  @id @default(cuid())
+  orgId       String
+  name        String
+  description String?
+  isActive    Boolean @default(true)
+
+  organization Organization    @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  items        InventoryItem[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([orgId, name])
+  @@index([orgId])
+}
+
+model InventoryAssignment {
+  id                 String    @id @default(cuid())
+  orgId              String
+  itemId             String
+  employeeId         String
+  quantity           Int       @default(1)
+  assignedDate       DateTime  @default(now())
+  expectedReturnDate DateTime?
+  status             String    @default("pending") // "pending", "approved", "rejected", "active", "returned", "cancelled"
+  reason             String? // Reason for assignment
+  requestedById      String? // User who requested the assignment
+  approvedById       String? // User who approved/rejected
+  approvedAt         DateTime?
+  rejectionReason    String?
+  returnedAt         DateTime?
+  returnNotes        String?
+
+  organization Organization      @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  item         InventoryItem     @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  employee     Employee          @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  requestedBy  User?             @relation("RequestedAssignments", fields: [requestedById], references: [id], onDelete: SetNull)
+  approvedBy   User?             @relation("ApprovedAssignments", fields: [approvedById], references: [id], onDelete: SetNull)
+  returns      InventoryReturn[]
+  damages      InventoryDamage[]
+  swaps        InventorySwap[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([orgId])
+  @@index([itemId])
+  @@index([employeeId])
+  @@index([status])
+  @@index([assignedDate])
+}
+
+model InventoryReturn {
+  id            String    @id @default(cuid())
+  orgId         String
+  assignmentId  String
+  itemId        String
+  employeeId    String
+  quantity      Int       @default(1)
+  returnDate    DateTime  @default(now())
+  returnReason  String?
+  condition     String    @default("good") // "good", "damaged", "lost", "stolen"
+  notes         String?
+  processedById String? // User who processed the return
+  processedAt   DateTime?
+
+  organization Organization        @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  assignment   InventoryAssignment @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
+  item         InventoryItem       @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  employee     Employee            @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  processedBy  User?               @relation("ProcessedReturns", fields: [processedById], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([orgId])
+  @@index([assignmentId])
+  @@index([itemId])
+  @@index([employeeId])
+  @@index([returnDate])
+}
+
+model InventoryDamage {
+  id                       String    @id @default(cuid())
+  orgId                    String
+  itemId                   String
+  employeeId               String? // If damage occurred while assigned
+  assignmentId             String? // Related assignment if applicable
+  damageDate               DateTime  @default(now())
+  damageType               String // "physical", "functional", "cosmetic", "total_loss"
+  severity                 String    @default("minor") // "minor", "moderate", "severe", "total"
+  description              String?
+  estimatedRepairCostCents Int? // Estimated repair cost in cents
+  currency                 String    @default("SAR")
+  status                   String    @default("reported") // "reported", "under_review", "repairing", "repaired", "written_off"
+  reportedById             String? // User who reported the damage
+  reviewedById             String? // User who reviewed the damage
+  reviewedAt               DateTime?
+  resolutionNotes          String?
+
+  organization Organization         @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  item         InventoryItem        @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  employee     Employee?            @relation(fields: [employeeId], references: [id], onDelete: SetNull)
+  assignment   InventoryAssignment? @relation(fields: [assignmentId], references: [id], onDelete: SetNull)
+  reportedBy   User?                @relation("ReportedDamages", fields: [reportedById], references: [id], onDelete: SetNull)
+  reviewedBy   User?                @relation("ReviewedDamages", fields: [reviewedById], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([orgId])
+  @@index([itemId])
+  @@index([employeeId])
+  @@index([status])
+  @@index([damageDate])
+}
+
+model InventorySwap {
+  id               String    @id @default(cuid())
+  orgId            String
+  fromItemId       String // Item being swapped out
+  toItemId         String // Item being swapped in
+  employeeId       String
+  fromAssignmentId String? // Original assignment if applicable
+  quantity         Int       @default(1)
+  swapDate         DateTime  @default(now())
+  reason           String?
+  status           String    @default("pending") // "pending", "approved", "rejected", "completed", "cancelled"
+  requestedById    String? // User who requested the swap
+  approvedById     String? // User who approved/rejected
+  approvedAt       DateTime?
+  rejectionReason  String?
+  completedAt      DateTime?
+  notes            String?
+
+  organization   Organization         @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  fromItem       InventoryItem        @relation("SwapFromItem", fields: [fromItemId], references: [id], onDelete: Cascade)
+  toItem         InventoryItem        @relation("SwapToItem", fields: [toItemId], references: [id], onDelete: Cascade)
+  employee       Employee             @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  fromAssignment InventoryAssignment? @relation(fields: [fromAssignmentId], references: [id], onDelete: SetNull)
+  requestedBy    User?                @relation("RequestedSwaps", fields: [requestedById], references: [id], onDelete: SetNull)
+  approvedBy     User?                @relation("ApprovedSwaps", fields: [approvedById], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([orgId])
+  @@index([fromItemId])
+  @@index([toItemId])
+  @@index([employeeId])
+  @@index([status])
+  @@index([swapDate])
+}
+
+// ============================================
+// PMO MODULE
+// ============================================
+
+model Project {
+  id              String    @id @default(cuid())
+  orgId           String
+  name            String
+  description     String?
+  clientName      String? // Client organization name
+  status          String    @default("planning") // "planning", "active", "on_hold", "completed", "cancelled"
+  priority        String    @default("medium") // "low", "medium", "high", "urgent"
+  startDate       DateTime?
+  endDate         DateTime?
+  actualStartDate DateTime?
+  actualEndDate   DateTime?
+  progress        Int       @default(0) // 0-100 percentage
+  budgetCents     Int? // Total budget in cents
+  currency        String    @default("SAR")
+  spentCents      Int       @default(0) // Amount spent so far
+  notes           String?
+
+  organization          Organization           @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  projectManagers       ProjectManager[]
+  clientProjectManagers ClientProjectManager[]
+  deliverables          Deliverable[]
+  budgets               Budget[]
+  risks                 Risk[]
+  issues                Issue[]
+  milestones            ProjectMilestone[]
+  documents             ProjectDocument[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([orgId])
+  @@index([status])
+  @@index([priority])
+  @@index([startDate, endDate])
+}
+
+model ProjectManager {
+  id         String  @id @default(cuid())
+  projectId  String
+  employeeId String
+  role       String  @default("manager") // "manager", "lead", "coordinator"
+  isPrimary  Boolean @default(false) // Primary project manager
+
+  project  Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  employee Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([projectId, employeeId])
+  @@index([projectId])
+  @@index([employeeId])
+}
+
+model ClientProjectManager {
+  id        String  @id @default(cuid())
+  projectId String
+  userId    String // User account for client project manager
+  name      String
+  email     String
+  phone     String?
+  company   String? // Client company name
+  isActive  Boolean @default(true)
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([projectId, userId])
+  @@index([projectId])
+  @@index([userId])
+}
+
+model Deliverable {
+  id           String    @id @default(cuid())
+  projectId    String
+  name         String
+  description  String?
+  status       String    @default("not_started") // "not_started", "in_progress", "completed", "cancelled"
+  priority     String    @default("medium") // "low", "medium", "high", "urgent"
+  dueDate      DateTime?
+  completedAt  DateTime?
+  assignedTo   String? // Employee ID or Client Project Manager ID
+  assignedType String? // "employee", "client_manager"
+  notes        String?
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([projectId])
+  @@index([status])
+  @@index([dueDate])
+}
+
+model Budget {
+  id            String  @id @default(cuid())
+  projectId     String
+  category      String // e.g., "labor", "materials", "equipment", "travel", "other"
+  description   String?
+  budgetedCents Int // Budgeted amount in cents
+  spentCents    Int     @default(0) // Amount spent in cents
+  currency      String  @default("SAR")
+  notes         String?
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([projectId])
+  @@index([category])
+}
+
+model Risk {
+  id             String    @id @default(cuid())
+  projectId      String
+  title          String
+  description    String?
+  category       String? // e.g., "technical", "financial", "schedule", "resource", "external"
+  probability    String    @default("medium") // "low", "medium", "high"
+  impact         String    @default("medium") // "low", "medium", "high", "critical"
+  status         String    @default("identified") // "identified", "mitigating", "mitigated", "closed", "occurred"
+  mitigationPlan String? // Plan to mitigate the risk
+  owner          String? // Employee ID or Client Project Manager ID
+  ownerType      String? // "employee", "client_manager"
+  occurredAt     DateTime? // When the risk actually occurred
+  resolvedAt     DateTime? // When the risk was resolved
+  notes          String?
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([projectId])
+  @@index([status])
+  @@index([probability, impact])
+}
+
+model Issue {
+  id           String    @id @default(cuid())
+  projectId    String
+  title        String
+  description  String?
+  category     String? // e.g., "technical", "process", "communication", "resource", "quality"
+  priority     String    @default("medium") // "low", "medium", "high", "urgent"
+  status       String    @default("open") // "open", "in_progress", "resolved", "closed"
+  assignedTo   String? // Employee ID or Client Project Manager ID
+  assignedType String? // "employee", "client_manager"
+  resolution   String? // Resolution description
+  resolvedAt   DateTime?
+  closedAt     DateTime?
+  notes        String?
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([projectId])
+  @@index([status])
+  @@index([priority])
+}
+
+model ProjectMilestone {
+  id          String    @id @default(cuid())
+  projectId   String
+  name        String
+  description String?
+  targetDate  DateTime
+  completedAt DateTime?
+  status      String    @default("pending") // "pending", "in_progress", "completed", "delayed", "cancelled"
+  notes       String?
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([projectId])
+  @@index([status])
+  @@index([targetDate])
+}
+
+model ProjectDocument {
+  id        String  @id @default(cuid())
+  projectId String
+  fileId    String // Reference to File model
+  category  String? // e.g., "contract", "specification", "report", "meeting_notes", "other"
+  title     String?
+  notes     String?
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  file    File    @relation("ProjectDocuments", fields: [fileId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([projectId, fileId])
+  @@index([projectId])
+  @@index([fileId])
+}
+
+// ============================================
+// DOCUMENT MANAGEMENT MODULE
+// ============================================
+
+model Document {
+  id             String   @id @default(cuid())
+  orgId          String
+  folderId       String? // Optional folder
+  name           String
+  description    String?
+  tags           String[] // Array of tags for categorization
+  status         String   @default("active") // "active", "archived", "deleted"
+  isPublic       Boolean  @default(false) // If true, accessible to all org members
+  currentVersion Int      @default(1) // Current version number
+  createdById    String
+  updatedById    String
+
+  organization Organization               @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  folder       DocumentFolder?            @relation("FolderDocuments", fields: [folderId], references: [id], onDelete: SetNull)
+  createdBy    User                       @relation("DocumentCreatedBy", fields: [createdById], references: [id], onDelete: Cascade)
+  updatedBy    User                       @relation("DocumentUpdatedBy", fields: [updatedById], references: [id], onDelete: Cascade)
+  files        File[]                     @relation("DocumentFiles")
+  shares       DocumentShare[]
+  categories   DocumentCategoryDocument[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([orgId])
+  @@index([folderId])
+  @@index([status])
+  @@index([createdById])
+}
+
+model DocumentFolder {
+  id          String  @id @default(cuid())
+  orgId       String
+  parentId    String? // For nested folders
+  name        String
+  description String?
+  color       String? // Hex color for folder icon
+  createdById String
+
+  organization Organization     @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  parent       DocumentFolder?  @relation("FolderHierarchy", fields: [parentId], references: [id], onDelete: Cascade)
+  children     DocumentFolder[] @relation("FolderHierarchy")
+  createdBy    User             @relation("FolderCreatedBy", fields: [createdById], references: [id], onDelete: Cascade)
+  documents    Document[]       @relation("FolderDocuments")
+  files        File[]           @relation("FolderFiles")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([orgId])
+  @@index([parentId])
+}
+
+model DocumentShare {
+  id              String    @id @default(cuid())
+  documentId      String
+  sharedWithId    String? // User ID if sharing with specific user
+  sharedWithEmail String? // Email if sharing externally
+  permission      String    @default("view") // "view", "comment", "edit"
+  expiresAt       DateTime? // Optional expiration
+  sharedById      String
+
+  document   Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  sharedWith User?    @relation("DocumentSharedWith", fields: [sharedWithId], references: [id], onDelete: Cascade)
+  sharedBy   User     @relation("DocumentSharedBy", fields: [sharedById], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([documentId, sharedWithId])
+  @@unique([documentId, sharedWithEmail])
+  @@index([documentId])
+  @@index([sharedWithId])
+}
+
+model DocumentCategory {
+  id          String  @id @default(cuid())
+  orgId       String
+  name        String
+  description String?
+  color       String? // Hex color
+
+  organization Organization               @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  documents    DocumentCategoryDocument[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([orgId, name])
+  @@index([orgId])
+}
+
+model DocumentCategoryDocument {
+  id         String @id @default(cuid())
+  categoryId String
+  documentId String
+
+  category DocumentCategory @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  document Document         @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@unique([categoryId, documentId])
+  @@index([categoryId])
+  @@index([documentId])
+}
+
+// ============================================
+// SALES & CRM MODULE
+// ============================================
+
+model Account {
+  id                 String  @id @default(cuid())
+  orgId              String
+  name               String
+  type               String  @default("customer") // "customer", "partner", "vendor", "competitor"
+  industry           String?
+  website            String?
+  phone              String?
+  email              String?
+  billingStreet      String?
+  billingCity        String?
+  billingState       String?
+  billingPostalCode  String?
+  billingCountry     String?
+  shippingStreet     String?
+  shippingCity       String?
+  shippingState      String?
+  shippingPostalCode String?
+  shippingCountry    String?
+  description        String?
+  annualRevenue      Int? // Revenue in cents
+  employees          Int?
+  rating             String? // "hot", "warm", "cold"
+  status             String  @default("active") // "active", "inactive", "archived"
+  ownerId            String? // Assigned user/employee
+
+  organization  Organization    @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  contacts      Contact[]
+  opportunities Opportunity[]
+  quotes        Quote[]
+  activities    SalesActivity[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([orgId])
+  @@index([type])
+  @@index([status])
+  @@index([ownerId])
+}
+
+model Contact {
+  id                String  @id @default(cuid())
+  orgId             String
+  accountId         String? // Optional - contact can be standalone
+  firstName         String
+  lastName          String
+  email             String?
+  phone             String?
+  mobile            String?
+  title             String? // Job title
+  department        String?
+  mailingStreet     String?
+  mailingCity       String?
+  mailingState      String?
+  mailingPostalCode String?
+  mailingCountry    String?
+  description       String?
+  leadSource        String? // "website", "referral", "advertisement", etc.
+  status            String  @default("active") // "active", "inactive", "do_not_contact"
+  ownerId           String? // Assigned user/employee
+
+  organization  Organization    @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  account       Account?        @relation(fields: [accountId], references: [id], onDelete: SetNull)
+  leads         Lead[]
+  opportunities Opportunity[]
+  quotes        Quote[]
+  activities    SalesActivity[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([orgId])
+  @@index([accountId])
+  @@index([email])
+  @@index([status])
+  @@index([ownerId])
+}
+
+model Lead {
+  id                     String    @id @default(cuid())
+  orgId                  String
+  contactId              String? // Converted contact
+  firstName              String
+  lastName               String?
+  company                String?
+  email                  String?
+  phone                  String?
+  mobile                 String?
+  title                  String?
+  website                String?
+  industry               String?
+  leadSource             String? // "website", "referral", "advertisement", etc.
+  status                 String    @default("new") // "new", "contacted", "qualified", "unqualified", "converted", "lost"
+  rating                 String? // "hot", "warm", "cold"
+  description            String?
+  convertedAt            DateTime?
+  convertedOpportunityId String?
+  ownerId                String? // Assigned user/employee
+
+  organization Organization    @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  contact      Contact?        @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  activities   SalesActivity[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([orgId])
+  @@index([status])
+  @@index([ownerId])
+  @@index([email])
+}
+
+model Opportunity {
+  id          String    @id @default(cuid())
+  orgId       String
+  accountId   String?
+  contactId   String?
+  name        String
+  description String?
+  stage       String    @default("prospecting") // "prospecting", "qualification", "proposal", "negotiation", "closed_won", "closed_lost"
+  probability Int       @default(10) // 0-100 percentage
+  amount      Int? // Expected revenue in cents
+  currency    String    @default("SAR")
+  closeDate   DateTime?
+  type        String? // "new_business", "existing_business", "renewal", "upgrade"
+  leadSource  String?
+  nextStep    String?
+  ownerId     String? // Assigned user/employee
+
+  organization Organization    @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  account      Account?        @relation(fields: [accountId], references: [id], onDelete: SetNull)
+  contact      Contact?        @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  quotes       Quote[]
+  activities   SalesActivity[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([orgId])
+  @@index([stage])
+  @@index([accountId])
+  @@index([contactId])
+  @@index([ownerId])
+  @@index([closeDate])
+}
+
+model Quote {
+  id            String    @id @default(cuid())
+  orgId         String
+  opportunityId String?
+  accountId     String?
+  contactId     String?
+  quoteNumber   String    @unique
+  name          String
+  status        String    @default("draft") // "draft", "sent", "approved", "rejected", "expired", "converted"
+  validUntil    DateTime?
+  subtotal      Int       @default(0) // In cents
+  taxRate       Decimal   @default(0) // Tax percentage (e.g., 15.00 for 15%)
+  taxAmount     Int       @default(0) // In cents
+  discount      Int       @default(0) // Discount amount in cents
+  total         Int       @default(0) // Total in cents
+  currency      String    @default("SAR")
+  terms         String? // Payment terms
+  notes         String?
+  ownerId       String? // Assigned user/employee
+
+  organization Organization    @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  opportunity  Opportunity?    @relation(fields: [opportunityId], references: [id], onDelete: SetNull)
+  account      Account?        @relation(fields: [accountId], references: [id], onDelete: SetNull)
+  contact      Contact?        @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  items        QuoteItem[]
+  activities   SalesActivity[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([orgId])
+  @@index([opportunityId])
+  @@index([status])
+  @@index([ownerId])
+}
+
+model QuoteItem {
+  id          String  @id @default(cuid())
+  quoteId     String
+  name        String
+  description String?
+  quantity    Int     @default(1)
+  unitPrice   Int // Price per unit in cents
+  discount    Int     @default(0) // Discount amount in cents
+  total       Int // Total for this line item in cents
+
+  quote Quote @relation(fields: [quoteId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([quoteId])
+}
+
+model SalesActivity {
+  id            String    @id @default(cuid())
+  orgId         String
+  type          String // "call", "email", "meeting", "task", "note", "event"
+  subject       String
+  description   String?
+  dueDate       DateTime?
+  completedAt   DateTime?
+  status        String    @default("not_started") // "not_started", "in_progress", "completed", "cancelled"
+  priority      String    @default("normal") // "low", "normal", "high", "urgent"
+  accountId     String?
+  contactId     String?
+  leadId        String?
+  opportunityId String?
+  quoteId       String?
+  assignedToId  String? // Assigned user/employee
+  createdById   String
+
+  organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  account      Account?     @relation(fields: [accountId], references: [id], onDelete: SetNull)
+  contact      Contact?     @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  lead         Lead?        @relation(fields: [leadId], references: [id], onDelete: SetNull)
+  opportunity  Opportunity? @relation(fields: [opportunityId], references: [id], onDelete: SetNull)
+  quote        Quote?       @relation(fields: [quoteId], references: [id], onDelete: SetNull)
+  assignedTo   User?        @relation("ActivityAssignedTo", fields: [assignedToId], references: [id], onDelete: SetNull)
+  createdBy    User         @relation("ActivityCreatedBy", fields: [createdById], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([orgId])
+  @@index([type])
+  @@index([status])
+  @@index([accountId])
+  @@index([contactId])
+  @@index([leadId])
+  @@index([opportunityId])
+  @@index([assignedToId])
+  @@index([dueDate])
+}
+
+// ============================================
+// MEMBERSHIP MODULE
+// ============================================
+
+model MembershipType {
+  id             String   @id @default(cuid())
+  orgId          String
+  name           String
+  description    String?
+  priceCents     Int      @default(0) // Price in cents
+  currency       String   @default("SAR")
+  durationMonths Int      @default(12) // Duration in months
+  benefits       String[] // Array of benefits
+  features       Json? // JSON object with feature flags
+  isActive       Boolean  @default(true)
+  maxMemberships Int? // Maximum number of memberships of this type (null = unlimited)
+
+  organization  Organization       @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  memberships   MemberMembership[]
+  announcements Announcement[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([orgId, name])
+  @@index([orgId])
+  @@index([isActive])
+}
+
+model MemberMembership {
+  id               String    @id @default(cuid())
+  orgId            String
+  membershipTypeId String
+  memberName       String
+  memberEmail      String
+  memberPhone      String?
+  memberAddress    String?
+  memberCity       String?
+  memberCountry    String?
+  status           String    @default("active") // "active", "expired", "cancelled", "pending"
+  startDate        DateTime
+  endDate          DateTime
+  renewedAt        DateTime? // Last renewal date
+  paymentStatus    String    @default("paid") // "paid", "pending", "failed", "refunded"
+  paymentAmount    Int? // Amount paid in cents
+  paymentMethod    String? // "cash", "card", "bank_transfer", etc.
+  notes            String?
+  createdById      String // User who created this membership
+
+  organization   Organization   @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  membershipType MembershipType @relation(fields: [membershipTypeId], references: [id], onDelete: Cascade)
+  createdBy      User           @relation("MembershipCreatedBy", fields: [createdById], references: [id], onDelete: Cascade)
+  conversations  Conversation[] @relation("MemberConversations")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([orgId])
+  @@index([membershipTypeId])
+  @@index([status])
+  @@index([memberEmail])
+  @@index([endDate])
+}
+
+model Announcement {
+  id                       String    @id @default(cuid())
+  orgId                    String
+  title                    String
+  content                  String
+  type                     String    @default("info") // "info", "warning", "success", "error"
+  priority                 String    @default("normal") // "low", "normal", "high", "urgent"
+  targetAudience           String    @default("all") // "all", "specific_type" (if specificMembershipTypeId is set)
+  specificMembershipTypeId String? // If set, only members with this type see the announcement
+  isPublished              Boolean   @default(false)
+  publishedAt              DateTime?
+  expiresAt                DateTime? // Optional expiration date
+  createdById              String
+
+  organization   Organization       @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  membershipType MembershipType?    @relation(fields: [specificMembershipTypeId], references: [id], onDelete: SetNull)
+  createdBy      User               @relation("AnnouncementCreatedBy", fields: [createdById], references: [id], onDelete: Cascade)
+  views          AnnouncementView[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([orgId])
+  @@index([isPublished])
+  @@index([publishedAt])
+  @@index([expiresAt])
+  @@index([targetAudience])
+  @@index([specificMembershipTypeId])
+}
+
+model AnnouncementView {
+  id             String   @id @default(cuid())
+  announcementId String
+  memberEmail    String // Email of the member who viewed
+  viewedAt       DateTime @default(now())
+
+  announcement Announcement @relation(fields: [announcementId], references: [id], onDelete: Cascade)
+
+  @@unique([announcementId, memberEmail])
+  @@index([announcementId])
+  @@index([memberEmail])
+}
+
+model Conversation {
+  id                 String    @id @default(cuid())
+  orgId              String
+  memberMembershipId String?
+  memberEmail        String // Email of the member
+  memberName         String // Name of the member
+  subject            String?
+  status             String    @default("open") // "open", "closed", "archived"
+  lastMessageAt      DateTime?
+  assignedToId       String? // Assigned admin/user
+
+  organization     Organization      @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  memberMembership MemberMembership? @relation("MemberConversations", fields: [memberMembershipId], references: [id], onDelete: SetNull)
+  assignedTo       User?             @relation("ConversationAssignedTo", fields: [assignedToId], references: [id], onDelete: SetNull)
+  messages         Message[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([orgId])
+  @@index([memberEmail])
+  @@index([memberMembershipId])
+  @@index([status])
+  @@index([assignedToId])
+  @@index([lastMessageAt])
+}
+
+model Message {
+  id             String    @id @default(cuid())
+  conversationId String
+  senderEmail    String // Email of sender (member or admin)
+  senderName     String // Name of sender
+  senderType     String    @default("member") // "member", "admin"
+  content        String
+  isRead         Boolean   @default(false)
+  readAt         DateTime?
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([conversationId])
+  @@index([senderEmail])
+  @@index([isRead])
+  @@index([createdAt])
+}
+
+// ============================================
+// HR TASK MANAGEMENT
+// ============================================
+
+model Task {
+  id             String    @id @default(cuid())
+  orgId          String
+  employeeId     String
+  title          String
+  description    String?
+  status         String    @default("pending") // "pending", "in_progress", "completed", "cancelled"
+  priority       String    @default("medium") // "low", "medium", "high", "urgent"
+  dueDate        DateTime?
+  completedAt    DateTime?
+  assignedById   String? // Who assigned this task
+  estimatedHours Float? // Estimated time to complete
+  tags           String? // Comma-separated tags
+
+  organization   Organization    @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  employee       Employee        @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  assignedBy     User?           @relation("TaskAssignedBy", fields: [assignedById], references: [id], onDelete: SetNull)
+  trackers       TaskTracker[]
+  calendarEvents CalendarEvent[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([orgId])
+  @@index([employeeId])
+  @@index([status])
+  @@index([dueDate])
+  @@index([assignedById])
+}
+
+model TaskTracker {
+  id          String    @id @default(cuid())
+  orgId       String
+  taskId      String
+  employeeId  String
+  startTime   DateTime
+  endTime     DateTime?
+  duration    Int? // Duration in minutes
+  description String? // What was worked on
+  isActive    Boolean   @default(false) // Currently tracking
+
+  organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  task         Task         @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  employee     Employee     @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([orgId])
+  @@index([taskId])
+  @@index([employeeId])
+  @@index([startTime])
+  @@index([isActive])
+}
+
+// ============================================
+// HR CALENDAR & SCHEDULING
+// ============================================
+
+model CalendarEvent {
+  id              String    @id @default(cuid())
+  orgId           String
+  employeeId      String? // If null, it's an organization-wide event
+  taskId          String? // Optional link to a task
+  title           String
+  description     String?
+  startDate       DateTime
+  endDate         DateTime?
+  allDay          Boolean   @default(false)
+  eventType       String    @default("meeting") // "meeting", "task", "leave", "training", "other"
+  location        String?
+  attendees       String? // Comma-separated employee IDs or emails
+  color           String? // Hex color for calendar display
+  isRecurring     Boolean   @default(false)
+  recurrenceRule  String? // RRULE format for recurring events
+  reminderMinutes Int? // Minutes before event to send reminder (null = no reminder)
+
+  organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  employee     Employee?    @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  task         Task?        @relation(fields: [taskId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([orgId])
+  @@index([employeeId])
+  @@index([taskId])
+  @@index([startDate])
+  @@index([eventType])
+}
