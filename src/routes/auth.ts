@@ -555,7 +555,7 @@ export async function seedDefaultModules(orgId: string) {
 
   if (hrModule) {
     const trialEndsAt = new Date();
-    trialEndsAt.setDate(trialEndsAt.getDate() + 14); // 14-day trial
+    trialEndsAt.setDate(trialEndsAt.getDate() + 7); // 1-week trial
 
     await prisma.orgModule.upsert({
       where: {
@@ -577,7 +577,7 @@ export async function seedDefaultModules(orgId: string) {
 
   if (ticketingModule) {
     const trialEndsAt = new Date();
-    trialEndsAt.setDate(trialEndsAt.getDate() + 14); // 14-day trial
+    trialEndsAt.setDate(trialEndsAt.getDate() + 7); // 1-week trial
 
     await prisma.orgModule.upsert({
       where: {
@@ -599,7 +599,7 @@ export async function seedDefaultModules(orgId: string) {
 
   if (marketplaceModule) {
     const trialEndsAt = new Date();
-    trialEndsAt.setDate(trialEndsAt.getDate() + 14); // 14-day trial
+    trialEndsAt.setDate(trialEndsAt.getDate() + 7); // 1-week trial
 
     await prisma.orgModule.upsert({
       where: {

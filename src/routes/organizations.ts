@@ -67,8 +67,7 @@ router.post('/create', async (req: Request, res: Response) => {
       });
     }
 
-    // Create organization
-    // If created by super admin, set to active. Otherwise, set to pending for approval
+    // Create organization - always active (no super-admin approval required)
     const isSuperAdmin = req.user?.isSuperAdmin || false;
     const organization = await prisma.organization.create({
       data: {
@@ -77,8 +76,8 @@ router.post('/create', async (req: Request, res: Response) => {
         industry: industry || null,
         companySize: companySize || null,
         signupSource: isSuperAdmin ? 'admin-created' : 'self-service',
-        status: isSuperAdmin ? 'active' : 'pending', // Only active if approved by super admin
-        isActive: isSuperAdmin, // Only active if approved by super admin
+        status: 'active',
+        isActive: true,
       },
     });
 
@@ -111,7 +110,7 @@ router.post('/create', async (req: Request, res: Response) => {
         });
 
         if (module) {
-          const trialDays = moduleConfig.trialDays || 14;
+          const trialDays = moduleConfig.trialDays ?? 7; // 1-week default trial
           const trialEndsAt = new Date();
           trialEndsAt.setDate(trialEndsAt.getDate() + trialDays);
 
@@ -139,34 +138,22 @@ router.post('/create', async (req: Request, res: Response) => {
       }
     }
 
-    // Send email based on status
+    // Send welcome email (no approval step - org is active immediately)
     try {
-      if (isSuperAdmin) {
-        // Super admin created - send welcome email immediately
-        const loginUrl = `${config.corsOrigin}/auth/login`;
-        const email = emailTemplates.organizationCreated(organization.name, adminEmail, loginUrl);
-        await sendEmail({
-          to: adminEmail,
-          subject: email.subject,
-          html: email.html,
-        });
-      } else {
-        // Self-service signup - send pending approval email
-        const email = emailTemplates.organizationPendingApproval(organization.name, adminEmail);
-        await sendEmail({
-          to: adminEmail,
-          subject: email.subject,
-          html: email.html,
-        });
-      }
+      const loginUrl = `${config.corsOrigin}/auth/login`;
+      const email = emailTemplates.organizationCreated(organization.name, adminEmail, loginUrl);
+      await sendEmail({
+        to: adminEmail,
+        subject: email.subject,
+        html: email.html,
+      });
     } catch (emailError) {
       console.error('Failed to send email:', emailError);
     }
 
     res.status(201).json({
-      message: isSuperAdmin
-        ? 'Organization created successfully'
-        : 'Organization registration submitted. Please wait for approval.',
+      message: 'Organization created successfully',
+      requiresApproval: false,
       organization: {
         id: organization.id,
         name: organization.name,
@@ -296,13 +283,13 @@ router.post('/:id/approve', authMiddleware, requireSuperAdmin, async (req: Reque
     });
 
     if (existingModules.length === 0) {
-      // Enable default modules (HR, Ticketing, Marketplace) with 14-day trial
+      // Enable default modules (HR, Ticketing, Marketplace) with 1-week trial
       const hrModule = await prisma.module.findUnique({ where: { key: 'hr' } });
       const ticketingModule = await prisma.module.findUnique({ where: { key: 'ticketing' } });
       const marketplaceModule = await prisma.module.findUnique({ where: { key: 'marketplace' } });
 
       const trialEndsAt = new Date();
-      trialEndsAt.setDate(trialEndsAt.getDate() + 14); // 14-day trial
+      trialEndsAt.setDate(trialEndsAt.getDate() + 7); // 1-week trial
 
       for (const module of [hrModule, ticketingModule, marketplaceModule].filter(Boolean)) {
         if (module) {

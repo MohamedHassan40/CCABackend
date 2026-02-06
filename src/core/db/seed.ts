@@ -893,7 +893,7 @@ async function main() {
     membershipModule,
   ];
   const trialEndsAt = new Date();
-  trialEndsAt.setDate(trialEndsAt.getDate() + 14); // 14-day trial
+  trialEndsAt.setDate(trialEndsAt.getDate() + 7); // 1-week trial
 
   // Org 1 admin (the one who "registered" / created Acme)
   const acmeAdminPassword = await hashPassword('admin123');
