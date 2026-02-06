@@ -111,6 +111,40 @@ If you see **500 on `/api/public/modules`**, check Railway logs for the line `Er
 
 ---
 
+## Troubleshooting: P3009 failed migration
+
+If you see:
+
+```text
+Error: P3009
+migrate found failed migrations in the target database...
+The `20250204000000_add_organization_expires_at` migration started at ... failed
+```
+
+Prisma has recorded a migration as failed, so it will not apply new migrations until you resolve it.
+
+**Step 1 – Mark the failed migration as rolled back** (so Prisma will try it again):
+
+From your machine, in **cca_backend**, set `DATABASE_URL` to your **Railway** Postgres URL (copy from Railway → Postgres service → Variables → `DATABASE_URL`), then run:
+
+```bash
+cd cca_backend
+set DATABASE_URL=postgresql://...   # Windows: set; macOS/Linux: export DATABASE_URL=...
+npx prisma migrate resolve --rolled-back "20250204000000_add_organization_expires_at"
+```
+
+**Step 2 – Redeploy the backend** on Railway (or run `npm run start:with-db` again). `prisma migrate deploy` will re-run that migration, then apply any later ones, then seed and start.
+
+If Step 2 fails with an error like **column "expiresAt" already exists**, the migration had actually applied before failing. Then mark it as applied instead and deploy again:
+
+```bash
+npx prisma migrate resolve --applied "20250204000000_add_organization_expires_at"
+```
+
+Then redeploy so later migrations and seed can run.
+
+---
+
 ## Re-running seed
 
 Seed uses `upsert`: safe to run multiple times. Existing super admin user will be updated (e.g. password reset to `SUPER_ADMIN_PASSWORD` or default). To only reset the super admin password, run the seed again with the desired `SUPER_ADMIN_EMAIL` and `SUPER_ADMIN_PASSWORD`.

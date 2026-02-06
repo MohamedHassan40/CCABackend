@@ -15,12 +15,13 @@ RUN npm install
 # Copy source code
 COPY . .
 
-# Generate Prisma client
-RUN npx prisma generate
+# Generate Prisma client and build
+RUN npx prisma generate && npm run build
 
 EXPOSE 3001
 
-CMD ["npm", "run", "dev"]
+# Production: run migrations, seed, then start server
+CMD ["npm", "run", "start:with-db"]
 
 
 
