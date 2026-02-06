@@ -1,14 +1,15 @@
 #!/bin/sh
 set -e
+cd /app
 
-# Ensure Prisma CLI is on PATH (Alpine/Railway may not include node_modules/.bin)
-export PATH="/app/node_modules/.bin:$PATH"
+# Run Prisma CLI via node (no reliance on PATH or prisma binary)
+PRISMA_CLI="node node_modules/prisma/build/index.js"
 
 echo "🔄 Running database migrations..."
-prisma migrate deploy
+$PRISMA_CLI migrate deploy
 
 echo "🌱 Seeding database..."
-prisma db seed
+$PRISMA_CLI db seed
 
 echo "🚀 Starting server..."
 exec node dist/server.js
