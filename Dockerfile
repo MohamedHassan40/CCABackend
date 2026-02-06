@@ -33,8 +33,9 @@ RUN printf '%s\n' \
 
 EXPOSE 3001
 
-# Production: migrations, seed, then server
-CMD ["./docker-entrypoint.sh"]
+# ENTRYPOINT runs even when Railway overrides start command (override becomes args, we ignore them)
+ENTRYPOINT ["./docker-entrypoint.sh"]
+CMD []
 
 
 
