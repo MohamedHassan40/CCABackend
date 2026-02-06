@@ -18,10 +18,14 @@ COPY . .
 # Generate Prisma client and build
 RUN npx prisma generate && npm run build
 
+# Use entrypoint that sets PATH so prisma CLI is found
+COPY scripts/docker-entrypoint.sh ./
+RUN chmod +x docker-entrypoint.sh
+
 EXPOSE 3001
 
-# Production: run migrations, seed, then start server
-CMD ["npm", "run", "start:with-db"]
+# Production: migrations, seed, then server (PATH set in script)
+CMD ["./docker-entrypoint.sh"]
 
 
 
