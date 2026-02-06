@@ -88,6 +88,29 @@ Then log in at your frontend with **info@cloud.org.sa** / **123456** and you wil
 
 ---
 
+## Railway (production)
+
+On **Railway**, the backend must run migrations and seed so the `Module` and `ModulePrice` tables exist and are populated. Otherwise `/api/public/modules` returns 500.
+
+**Option A – Recommended:** Use the start script that runs migrations and seed before starting the server.
+
+1. In your Railway **backend** service → **Settings** → **Deploy**.
+2. Set **Start Command** to:
+   ```bash
+   npm run start:with-db
+   ```
+3. Redeploy. Each deploy will run `prisma migrate deploy`, then `prisma db seed`, then start the server. Seed is idempotent (upsert), so this is safe.
+
+**Option B – Manual one-time setup:** Keep Start Command as `npm start`. Then run migrations and seed once (e.g. via Railway CLI or a one-off job):
+   ```bash
+   npx prisma migrate deploy
+   npx prisma db seed
+   ```
+
+If you see **500 on `/api/public/modules`**, check Railway logs for the line `Error fetching public modules: ...`; the message will indicate DB connection or missing tables. Fix by running migrations and seed as above.
+
+---
+
 ## Re-running seed
 
 Seed uses `upsert`: safe to run multiple times. Existing super admin user will be updated (e.g. password reset to `SUPER_ADMIN_PASSWORD` or default). To only reset the super admin password, run the seed again with the desired `SUPER_ADMIN_EMAIL` and `SUPER_ADMIN_PASSWORD`.

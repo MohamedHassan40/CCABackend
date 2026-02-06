@@ -35,7 +35,8 @@ router.get('/modules', async (req: Request, res: Response) => {
       }))
     );
   } catch (error) {
-    console.error('Error fetching public modules:', error);
+    const message = error instanceof Error ? error.message : String(error);
+    console.error('Error fetching public modules:', message, error);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
