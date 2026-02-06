@@ -6,6 +6,7 @@ import crypto from 'crypto';
 import prisma from '../core/db';
 
 const MOYASAR_WEBHOOK_SECRET = process.env.MOYASAR_WEBHOOK_SECRET || process.env.MOYASAR_SECRET_KEY || '';
+
 /**
  * Verify Moyasar webhook signature
  * Moyasar sends webhooks with a signature in the X-Moyasar-Signature header
