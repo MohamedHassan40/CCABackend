@@ -20,6 +20,8 @@ For Railway: use the `DATABASE_URL` from your Postgres service.
 
 ## 2. Create database tables (run migrations)
 
+There is a **single migration** (`0_init`) that creates the full schema from scratch.
+
 From the **cca_backend** folder:
 
 ```bash
@@ -30,7 +32,9 @@ npx prisma migrate deploy
 ```
 
 - **`prisma generate`** – generates the Prisma client.
-- **`prisma migrate deploy`** – applies all migrations and creates/updates tables (use this in production or when DB already exists).
+- **`prisma migrate deploy`** – applies the migration and creates all tables.
+
+**If your database already has tables or old migration history** (e.g. from previous multi-migration setup): run `migrate deploy` only on a **fresh** database, or clear the DB (drop all tables and the `_prisma_migrations` table) first. The single migration assumes an empty database.
 
 If you are in **development** and want to create the database and apply migrations in one go:
 
