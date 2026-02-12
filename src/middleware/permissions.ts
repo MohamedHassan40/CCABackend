@@ -7,58 +7,63 @@ import prisma from '../core/db';
  */
 export function requirePermission(permissionKey: string) {
   return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
-    if (!req.user || !req.org) {
-      res.status(401).json({ error: 'Authentication required' });
-      return;
-    }
+    try {
+      if (!req.user || !req.org) {
+        res.status(401).json({ error: 'Authentication required' });
+        return;
+      }
 
-    // Super admin bypass
-    if (req.user.isSuperAdmin) {
-      next();
-      return;
-    }
+      // Super admin bypass
+      if (req.user.isSuperAdmin) {
+        next();
+        return;
+      }
 
-    // Get user's memberships for this org
-    const membership = await prisma.membership.findUnique({
-      where: {
-        userId_organizationId: {
-          userId: req.user.id,
-          organizationId: req.org.id,
+      // Get user's memberships for this org
+      const membership = await prisma.membership.findUnique({
+        where: {
+          userId_organizationId: {
+            userId: req.user.id,
+            organizationId: req.org.id,
+          },
         },
-      },
-      include: {
-        membershipRoles: {
-          include: {
-            role: {
-              include: {
-                rolePermissions: {
-                  include: {
-                    permission: true,
+        include: {
+          membershipRoles: {
+            include: {
+              role: {
+                include: {
+                  rolePermissions: {
+                    include: {
+                      permission: true,
+                    },
                   },
                 },
               },
             },
           },
         },
-      },
-    });
+      });
 
-    if (!membership || !membership.isActive) {
-      res.status(403).json({ error: 'No active membership found' });
-      return;
+      if (!membership || !membership.isActive) {
+        res.status(403).json({ error: 'No active membership found' });
+        return;
+      }
+
+      // Check if any role has the required permission
+      const hasPermission = membership.membershipRoles.some((mr) =>
+        mr.role.rolePermissions.some((rp) => rp.permission.key === permissionKey)
+      );
+
+      if (!hasPermission) {
+        res.status(403).json({ error: `Permission required: ${permissionKey}` });
+        return;
+      }
+
+      next();
+    } catch (error) {
+      console.error('Error in requirePermission middleware:', error);
+      res.status(500).json({ error: 'Internal server error' });
     }
-
-    // Check if any role has the required permission
-    const hasPermission = membership.membershipRoles.some((mr) =>
-      mr.role.rolePermissions.some((rp) => rp.permission.key === permissionKey)
-    );
-
-    if (!hasPermission) {
-      res.status(403).json({ error: `Permission required: ${permissionKey}` });
-      return;
-    }
-
-    next();
   };
 }
 
