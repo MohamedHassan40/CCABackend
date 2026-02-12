@@ -33,6 +33,9 @@ initErrorTracking();
 
 const app = express();
 
+// Trust proxy - required for rate limiting behind reverse proxy (Railway, etc.)
+app.set('trust proxy', true);
+
 // Security middleware (apply before other middleware)
 if (config.nodeEnv === 'production') {
   app.use(helmetConfig);
