@@ -1,18 +1,18 @@
 import { Router } from 'express';
-import prisma from '../../core/db';
-import { requirePermission } from '../../middleware/permissions';
+import prisma from '../../../core/db';
+import { requirePermission } from '../../../middleware/permissions';
 
 const router = Router();
 
-// GET /api/inventory/returns
-router.get('/', requirePermission('inventory.returns.view'), async (req, res) => {
+// GET /api/hr/assets/returns
+router.get('/', requirePermission('hr.assets.returns.view'), async (req, res) => {
   try {
     if (!req.org) {
       res.status(401).json({ error: 'Unauthorized' });
       return;
     }
 
-    const { employeeId, itemId, assignmentId } = req.query;
+    const { employeeId, assetId, assignmentId } = req.query;
 
     const where: any = {
       orgId: req.org.id,
@@ -22,18 +22,18 @@ router.get('/', requirePermission('inventory.returns.view'), async (req, res) =>
       where.employeeId = employeeId as string;
     }
 
-    if (itemId) {
-      where.itemId = itemId as string;
+    if (assetId) {
+      where.assetId = assetId as string;
     }
 
     if (assignmentId) {
       where.assignmentId = assignmentId as string;
     }
 
-    const returns = await prisma.inventoryReturn.findMany({
+    const returns = await prisma.assetReturn.findMany({
       where,
       include: {
-        item: {
+        asset: {
           select: {
             id: true,
             name: true,
@@ -78,8 +78,8 @@ router.get('/', requirePermission('inventory.returns.view'), async (req, res) =>
   }
 });
 
-// GET /api/inventory/returns/:id
-router.get('/:id', requirePermission('inventory.returns.view'), async (req, res) => {
+// GET /api/hr/assets/returns/:id
+router.get('/:id', requirePermission('hr.assets.returns.view'), async (req, res) => {
   try {
     if (!req.org) {
       res.status(401).json({ error: 'Unauthorized' });
@@ -88,13 +88,13 @@ router.get('/:id', requirePermission('inventory.returns.view'), async (req, res)
 
     const { id } = req.params;
 
-    const returnRecord = await prisma.inventoryReturn.findFirst({
+    const returnRecord = await prisma.assetReturn.findFirst({
       where: {
         id,
         orgId: req.org.id,
       },
       include: {
-        item: {
+        asset: {
           include: {
             category: true,
             images: true,
@@ -151,8 +151,8 @@ router.get('/:id', requirePermission('inventory.returns.view'), async (req, res)
   }
 });
 
-// POST /api/inventory/returns
-router.post('/', requirePermission('inventory.returns.create'), async (req, res) => {
+// POST /api/hr/assets/returns
+router.post('/', requirePermission('hr.assets.returns.create'), async (req, res) => {
   try {
     if (!req.org || !req.user) {
       res.status(401).json({ error: 'Unauthorized' });
@@ -167,14 +167,14 @@ router.post('/', requirePermission('inventory.returns.create'), async (req, res)
     }
 
     // Check if assignment exists and is active
-    const assignment = await prisma.inventoryAssignment.findFirst({
+    const assignment = await prisma.assetAssignment.findFirst({
       where: {
         id: assignmentId,
         orgId: req.org.id,
         status: 'active',
       },
       include: {
-        item: true,
+        asset: true,
         employee: true,
         returns: {
           select: {
@@ -201,11 +201,11 @@ router.post('/', requirePermission('inventory.returns.create'), async (req, res)
     }
 
     // Create return record
-    const returnRecord = await prisma.inventoryReturn.create({
+    const returnRecord = await prisma.assetReturn.create({
       data: {
         orgId: req.org.id,
         assignmentId,
-        itemId: assignment.itemId,
+        assetId: assignment.assetId,
         employeeId: assignment.employeeId,
         quantity,
         returnReason: returnReason || null,
@@ -215,7 +215,7 @@ router.post('/', requirePermission('inventory.returns.create'), async (req, res)
         processedAt: new Date(),
       },
       include: {
-        item: {
+        asset: {
           select: {
             id: true,
             name: true,
@@ -248,7 +248,7 @@ router.post('/', requirePermission('inventory.returns.create'), async (req, res)
     // Update assignment status if fully returned
     const newReturnedQuantity = returnedQuantity + quantity;
     if (newReturnedQuantity >= assignment.quantity) {
-      await prisma.inventoryAssignment.update({
+      await prisma.assetAssignment.update({
         where: { id: assignmentId },
         data: {
           status: 'returned',
@@ -258,10 +258,10 @@ router.post('/', requirePermission('inventory.returns.create'), async (req, res)
       });
     }
 
-    // Update item quantity if condition is good
+    // Update asset quantity if condition is good
     if (condition === 'good') {
-      await prisma.inventoryItem.update({
-        where: { id: assignment.itemId },
+      await prisma.employeeAsset.update({
+        where: { id: assignment.assetId },
         data: {
           quantity: {
             increment: quantity,
@@ -269,9 +269,9 @@ router.post('/', requirePermission('inventory.returns.create'), async (req, res)
         },
       });
     } else {
-      // If damaged, update item condition or create damage record
-      await prisma.inventoryItem.update({
-        where: { id: assignment.itemId },
+      // If damaged, update asset condition or create damage record
+      await prisma.employeeAsset.update({
+        where: { id: assignment.assetId },
         data: {
           condition: 'damaged',
         },
@@ -286,17 +286,5 @@ router.post('/', requirePermission('inventory.returns.create'), async (req, res)
 });
 
 export default router;
-
-
-
-
-
-
-
-
-
-
-
-
 
 

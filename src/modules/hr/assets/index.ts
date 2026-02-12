@@ -1,10 +1,6 @@
 import { Router } from 'express';
-import prisma from '../../core/db';
-import { authMiddleware } from '../../middleware/auth';
-import { requireModuleEnabled } from '../../middleware/modules';
-import { requirePermission } from '../../middleware/permissions';
-import { moduleRegistry } from '../../core/modules/registry';
-import type { ModuleManifest } from '@cloud-org/shared';
+import prisma from '../../../core/db';
+import { requirePermission } from '../../../middleware/permissions';
 import assignmentsRouter from './assignments';
 import returnsRouter from './returns';
 import damagesRouter from './damages';
@@ -12,84 +8,12 @@ import swapsRouter from './swaps';
 
 const router = Router();
 
-// Module manifest
-export const inventoryManifest: ModuleManifest = {
-  key: 'inventory',
-  name: 'Inventory Management',
-  icon: 'package',
-  sidebarItems: [
-    {
-      path: '/inventory/items',
-      label: 'Items',
-      permission: 'inventory.items.view',
-    },
-    {
-      path: '/inventory/categories',
-      label: 'Categories',
-      permission: 'inventory.categories.view',
-    },
-    {
-      path: '/inventory/assignments',
-      label: 'Assignments',
-      permission: 'inventory.assignments.view',
-    },
-    {
-      path: '/inventory/returns',
-      label: 'Returns',
-      permission: 'inventory.returns.view',
-    },
-    {
-      path: '/inventory/damages',
-      label: 'Damages',
-      permission: 'inventory.damages.view',
-    },
-    {
-      path: '/inventory/swaps',
-      label: 'Swaps',
-      permission: 'inventory.swaps.view',
-    },
-  ],
-  dashboardWidgets: [
-    {
-      id: 'inventory-item-count',
-      title: 'Total Items',
-      description: 'Number of items in inventory',
-      apiPath: '/api/inventory/widgets/item-count',
-      permission: 'inventory.items.view',
-    },
-    {
-      id: 'inventory-low-stock',
-      title: 'Low Stock Items',
-      description: 'Items below minimum quantity',
-      apiPath: '/api/inventory/widgets/low-stock',
-      permission: 'inventory.items.view',
-    },
-  ],
-};
-
-// Register module
-export function registerInventoryModule(routerInstance: Router): void {
-  routerInstance.use('/api/inventory', authMiddleware, requireModuleEnabled('inventory'), router);
-
-  // Register sub-routes
-  routerInstance.use('/api/inventory/assignments', authMiddleware, requireModuleEnabled('inventory'), assignmentsRouter);
-  routerInstance.use('/api/inventory/returns', authMiddleware, requireModuleEnabled('inventory'), returnsRouter);
-  routerInstance.use('/api/inventory/damages', authMiddleware, requireModuleEnabled('inventory'), damagesRouter);
-  routerInstance.use('/api/inventory/swaps', authMiddleware, requireModuleEnabled('inventory'), swapsRouter);
-
-  moduleRegistry.register({
-    key: 'inventory',
-    manifest: inventoryManifest,
-    registerRoutes: () => {}, // Already registered above
-  });
-}
-
 // ============================================
-// INVENTORY ITEMS
+// EMPLOYEE ASSETS
 // ============================================
 
-// GET /api/inventory/items
-router.get('/items', requirePermission('inventory.items.view'), async (req, res) => {
+// GET /api/hr/assets
+router.get('/', requirePermission('hr.assets.view'), async (req, res) => {
   try {
     if (!req.org) {
       res.status(401).json({ error: 'Unauthorized' });
@@ -118,7 +42,7 @@ router.get('/items', requirePermission('inventory.items.view'), async (req, res)
       ];
     }
 
-    const items = await prisma.inventoryItem.findMany({
+    const assets = await prisma.employeeAsset.findMany({
       where,
       include: {
         category: {
@@ -148,15 +72,15 @@ router.get('/items', requirePermission('inventory.items.view'), async (req, res)
       },
     });
 
-    res.json(items);
+    res.json(assets);
   } catch (error) {
-    console.error('Error fetching inventory items:', error);
+    console.error('Error fetching assets:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
 
-// GET /api/inventory/items/:id
-router.get('/items/:id', requirePermission('inventory.items.view'), async (req, res) => {
+// GET /api/hr/assets/:id
+router.get('/:id', requirePermission('hr.assets.view'), async (req, res) => {
   try {
     if (!req.org) {
       res.status(401).json({ error: 'Unauthorized' });
@@ -165,7 +89,7 @@ router.get('/items/:id', requirePermission('inventory.items.view'), async (req, 
 
     const { id } = req.params;
 
-    const item = await prisma.inventoryItem.findFirst({
+    const asset = await prisma.employeeAsset.findFirst({
       where: {
         id,
         orgId: req.org.id,
@@ -220,20 +144,20 @@ router.get('/items/:id', requirePermission('inventory.items.view'), async (req, 
       },
     });
 
-    if (!item) {
-      res.status(404).json({ error: 'Item not found' });
+    if (!asset) {
+      res.status(404).json({ error: 'Asset not found' });
       return;
     }
 
-    res.json(item);
+    res.json(asset);
   } catch (error) {
-    console.error('Error fetching inventory item:', error);
+    console.error('Error fetching asset:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
 
-// POST /api/inventory/items
-router.post('/items', requirePermission('inventory.items.create'), async (req, res) => {
+// POST /api/hr/assets
+router.post('/', requirePermission('hr.assets.create'), async (req, res) => {
   try {
     if (!req.org) {
       res.status(401).json({ error: 'Unauthorized' });
@@ -262,7 +186,7 @@ router.post('/items', requirePermission('inventory.items.create'), async (req, r
       return;
     }
 
-    const item = await prisma.inventoryItem.create({
+    const asset = await prisma.employeeAsset.create({
       data: {
         orgId: req.org.id,
         name,
@@ -285,15 +209,15 @@ router.post('/items', requirePermission('inventory.items.create'), async (req, r
       },
     });
 
-    res.status(201).json(item);
+    res.status(201).json(asset);
   } catch (error) {
-    console.error('Error creating inventory item:', error);
+    console.error('Error creating asset:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
 
-// PUT /api/inventory/items/:id
-router.put('/items/:id', requirePermission('inventory.items.edit'), async (req, res) => {
+// PUT /api/hr/assets/:id
+router.put('/:id', requirePermission('hr.assets.edit'), async (req, res) => {
   try {
     if (!req.org) {
       res.status(401).json({ error: 'Unauthorized' });
@@ -318,19 +242,19 @@ router.put('/items/:id', requirePermission('inventory.items.edit'), async (req, 
       notes,
     } = req.body;
 
-    const item = await prisma.inventoryItem.findFirst({
+    const asset = await prisma.employeeAsset.findFirst({
       where: {
         id,
         orgId: req.org.id,
       },
     });
 
-    if (!item) {
-      res.status(404).json({ error: 'Item not found' });
+    if (!asset) {
+      res.status(404).json({ error: 'Asset not found' });
       return;
     }
 
-    const updated = await prisma.inventoryItem.update({
+    const updated = await prisma.employeeAsset.update({
       where: { id },
       data: {
         ...(name !== undefined && { name }),
@@ -355,13 +279,13 @@ router.put('/items/:id', requirePermission('inventory.items.edit'), async (req, 
 
     res.json(updated);
   } catch (error) {
-    console.error('Error updating inventory item:', error);
+    console.error('Error updating asset:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
 
-// DELETE /api/inventory/items/:id
-router.delete('/items/:id', requirePermission('inventory.items.delete'), async (req, res) => {
+// DELETE /api/hr/assets/:id
+router.delete('/:id', requirePermission('hr.assets.delete'), async (req, res) => {
   try {
     if (!req.org) {
       res.status(401).json({ error: 'Unauthorized' });
@@ -370,7 +294,7 @@ router.delete('/items/:id', requirePermission('inventory.items.delete'), async (
 
     const { id } = req.params;
 
-    const item = await prisma.inventoryItem.findFirst({
+    const asset = await prisma.employeeAsset.findFirst({
       where: {
         id,
         orgId: req.org.id,
@@ -388,31 +312,31 @@ router.delete('/items/:id', requirePermission('inventory.items.delete'), async (
       },
     });
 
-    if (!item) {
-      res.status(404).json({ error: 'Item not found' });
+    if (!asset) {
+      res.status(404).json({ error: 'Asset not found' });
       return;
     }
 
-    if (item._count.assignments > 0) {
+    if (asset._count.assignments > 0) {
       res.status(400).json({
-        error: 'Cannot delete item with active assignments. Please return all assignments first.',
+        error: 'Cannot delete asset with active assignments. Please return all assignments first.',
       });
       return;
     }
 
-    await prisma.inventoryItem.delete({
+    await prisma.employeeAsset.delete({
       where: { id },
     });
 
-    res.json({ message: 'Item deleted successfully' });
+    res.json({ message: 'Asset deleted successfully' });
   } catch (error) {
-    console.error('Error deleting inventory item:', error);
+    console.error('Error deleting asset:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
 
-// POST /api/inventory/items/:id/images
-router.post('/items/:id/images', requirePermission('inventory.items.edit'), async (req, res) => {
+// POST /api/hr/assets/:id/images
+router.post('/:id/images', requirePermission('hr.assets.edit'), async (req, res) => {
   try {
     if (!req.org) {
       res.status(401).json({ error: 'Unauthorized' });
@@ -427,29 +351,16 @@ router.post('/items/:id/images', requirePermission('inventory.items.edit'), asyn
       return;
     }
 
-    const item = await prisma.inventoryItem.findFirst({
+    const asset = await prisma.employeeAsset.findFirst({
       where: {
         id,
         orgId: req.org.id,
       },
     });
 
-    if (!item) {
-      res.status(404).json({ error: 'Item not found' });
+    if (!asset) {
+      res.status(404).json({ error: 'Asset not found' });
       return;
-    }
-
-    // If this is marked as primary, unset other primary images
-    if (isPrimary) {
-      await prisma.file.updateMany({
-        where: {
-          inventoryItemId: id,
-          entityType: 'inventory',
-        },
-        data: {
-          // We'll handle isPrimary through a separate field or logic
-        },
-      });
     }
 
     // Create file record for the image
@@ -463,21 +374,21 @@ router.post('/items/:id/images', requirePermission('inventory.items.edit'), asyn
         size: 0,
         url: imageUrl,
         storageType: 'local',
-        entityType: 'inventory',
+        entityType: 'asset',
         entityId: id,
-        inventoryItemId: id,
+        assetId: id,
       },
     });
 
     res.status(201).json(file);
   } catch (error) {
-    console.error('Error adding item image:', error);
+    console.error('Error adding asset image:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
 
-// DELETE /api/inventory/items/:id/images/:imageId
-router.delete('/items/:id/images/:imageId', requirePermission('inventory.items.edit'), async (req, res) => {
+// DELETE /api/hr/assets/:id/images/:imageId
+router.delete('/:id/images/:imageId', requirePermission('hr.assets.edit'), async (req, res) => {
   try {
     if (!req.org) {
       res.status(401).json({ error: 'Unauthorized' });
@@ -489,7 +400,7 @@ router.delete('/items/:id/images/:imageId', requirePermission('inventory.items.e
     const file = await prisma.file.findFirst({
       where: {
         id: imageId,
-        inventoryItemId: id,
+        assetId: id,
         organizationId: req.org.id,
       },
     });
@@ -505,31 +416,31 @@ router.delete('/items/:id/images/:imageId', requirePermission('inventory.items.e
 
     res.json({ message: 'Image deleted successfully' });
   } catch (error) {
-    console.error('Error deleting item image:', error);
+    console.error('Error deleting asset image:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
 
 // ============================================
-// INVENTORY CATEGORIES
+// ASSET CATEGORIES
 // ============================================
 
-// GET /api/inventory/categories
-router.get('/categories', requirePermission('inventory.categories.view'), async (req, res) => {
+// GET /api/hr/assets/categories
+router.get('/categories', requirePermission('hr.assets.categories.view'), async (req, res) => {
   try {
     if (!req.org) {
       res.status(401).json({ error: 'Unauthorized' });
       return;
     }
 
-    const categories = await prisma.inventoryCategory.findMany({
+    const categories = await prisma.assetCategory.findMany({
       where: {
         orgId: req.org.id,
       },
       include: {
         _count: {
           select: {
-            items: true,
+            assets: true,
           },
         },
       },
@@ -545,8 +456,8 @@ router.get('/categories', requirePermission('inventory.categories.view'), async 
   }
 });
 
-// POST /api/inventory/categories
-router.post('/categories', requirePermission('inventory.categories.create'), async (req, res) => {
+// POST /api/hr/assets/categories
+router.post('/categories', requirePermission('hr.assets.categories.create'), async (req, res) => {
   try {
     if (!req.org) {
       res.status(401).json({ error: 'Unauthorized' });
@@ -561,7 +472,7 @@ router.post('/categories', requirePermission('inventory.categories.create'), asy
     }
 
     // Check if category with same name exists
-    const existing = await prisma.inventoryCategory.findFirst({
+    const existing = await prisma.assetCategory.findFirst({
       where: {
         orgId: req.org.id,
         name,
@@ -573,7 +484,7 @@ router.post('/categories', requirePermission('inventory.categories.create'), asy
       return;
     }
 
-    const category = await prisma.inventoryCategory.create({
+    const category = await prisma.assetCategory.create({
       data: {
         orgId: req.org.id,
         name,
@@ -588,8 +499,8 @@ router.post('/categories', requirePermission('inventory.categories.create'), asy
   }
 });
 
-// PUT /api/inventory/categories/:id
-router.put('/categories/:id', requirePermission('inventory.categories.edit'), async (req, res) => {
+// PUT /api/hr/assets/categories/:id
+router.put('/categories/:id', requirePermission('hr.assets.categories.edit'), async (req, res) => {
   try {
     if (!req.org) {
       res.status(401).json({ error: 'Unauthorized' });
@@ -599,7 +510,7 @@ router.put('/categories/:id', requirePermission('inventory.categories.edit'), as
     const { id } = req.params;
     const { name, description, isActive } = req.body;
 
-    const category = await prisma.inventoryCategory.findFirst({
+    const category = await prisma.assetCategory.findFirst({
       where: {
         id,
         orgId: req.org.id,
@@ -613,7 +524,7 @@ router.put('/categories/:id', requirePermission('inventory.categories.edit'), as
 
     // Check if new name conflicts with existing category
     if (name && name !== category.name) {
-      const existing = await prisma.inventoryCategory.findFirst({
+      const existing = await prisma.assetCategory.findFirst({
         where: {
           orgId: req.org.id,
           name,
@@ -627,7 +538,7 @@ router.put('/categories/:id', requirePermission('inventory.categories.edit'), as
       }
     }
 
-    const updated = await prisma.inventoryCategory.update({
+    const updated = await prisma.assetCategory.update({
       where: { id },
       data: {
         ...(name !== undefined && { name }),
@@ -643,8 +554,8 @@ router.put('/categories/:id', requirePermission('inventory.categories.edit'), as
   }
 });
 
-// DELETE /api/inventory/categories/:id
-router.delete('/categories/:id', requirePermission('inventory.categories.delete'), async (req, res) => {
+// DELETE /api/hr/assets/categories/:id
+router.delete('/categories/:id', requirePermission('hr.assets.categories.delete'), async (req, res) => {
   try {
     if (!req.org) {
       res.status(401).json({ error: 'Unauthorized' });
@@ -653,7 +564,7 @@ router.delete('/categories/:id', requirePermission('inventory.categories.delete'
 
     const { id } = req.params;
 
-    const category = await prisma.inventoryCategory.findFirst({
+    const category = await prisma.assetCategory.findFirst({
       where: {
         id,
         orgId: req.org.id,
@@ -661,7 +572,7 @@ router.delete('/categories/:id', requirePermission('inventory.categories.delete'
       include: {
         _count: {
           select: {
-            items: true,
+            assets: true,
           },
         },
       },
@@ -672,14 +583,14 @@ router.delete('/categories/:id', requirePermission('inventory.categories.delete'
       return;
     }
 
-    if (category._count.items > 0) {
+    if (category._count.assets > 0) {
       res.status(400).json({
-        error: 'Cannot delete category with items. Please remove or reassign items first.',
+        error: 'Cannot delete category with assets. Please remove or reassign assets first.',
       });
       return;
     }
 
-    await prisma.inventoryCategory.delete({
+    await prisma.assetCategory.delete({
       where: { id },
     });
 
@@ -694,14 +605,14 @@ router.delete('/categories/:id', requirePermission('inventory.categories.delete'
 // WIDGETS
 // ============================================
 
-router.get('/widgets/item-count', requirePermission('inventory.items.view'), async (req, res) => {
+router.get('/widgets/asset-count', requirePermission('hr.assets.view'), async (req, res) => {
   try {
     if (!req.org) {
       res.status(401).json({ error: 'Unauthorized' });
       return;
     }
 
-    const count = await prisma.inventoryItem.count({
+    const count = await prisma.employeeAsset.count({
       where: {
         orgId: req.org.id,
       },
@@ -709,19 +620,19 @@ router.get('/widgets/item-count', requirePermission('inventory.items.view'), asy
 
     res.json({ count });
   } catch (error) {
-    console.error('Error fetching item count:', error);
+    console.error('Error fetching asset count:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
 
-router.get('/widgets/low-stock', requirePermission('inventory.items.view'), async (req, res) => {
+router.get('/widgets/low-stock', requirePermission('hr.assets.view'), async (req, res) => {
   try {
     if (!req.org) {
       res.status(401).json({ error: 'Unauthorized' });
       return;
     }
 
-    const items = await prisma.inventoryItem.findMany({
+    const assets = await prisma.employeeAsset.findMany({
       where: {
         orgId: req.org.id,
         minQuantity: { not: null },
@@ -734,14 +645,19 @@ router.get('/widgets/low-stock', requirePermission('inventory.items.view'), asyn
       },
     });
 
-    const lowStockItems = items.filter(
-      (item) => item.minQuantity !== null && item.quantity <= item.minQuantity
+    const lowStockAssets = assets.filter(
+      (asset) => asset.minQuantity !== null && asset.quantity <= asset.minQuantity
     );
 
-    res.json({ count: lowStockItems.length, items: lowStockItems });
+    res.json({ count: lowStockAssets.length, assets: lowStockAssets });
   } catch (error) {
-    console.error('Error fetching low stock items:', error);
+    console.error('Error fetching low stock assets:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
+
+// Export sub-routers
+export { assignmentsRouter, returnsRouter, damagesRouter, swapsRouter };
+export default router;
+
 

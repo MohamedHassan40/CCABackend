@@ -1,18 +1,18 @@
 import { Router } from 'express';
-import prisma from '../../core/db';
-import { requirePermission } from '../../middleware/permissions';
+import prisma from '../../../core/db';
+import { requirePermission } from '../../../middleware/permissions';
 
 const router = Router();
 
-// GET /api/inventory/swaps
-router.get('/', requirePermission('inventory.swaps.view'), async (req, res) => {
+// GET /api/hr/assets/swaps
+router.get('/', requirePermission('hr.assets.swaps.view'), async (req, res) => {
   try {
     if (!req.org) {
       res.status(401).json({ error: 'Unauthorized' });
       return;
     }
 
-    const { status, employeeId, fromItemId, toItemId } = req.query;
+    const { status, employeeId, fromAssetId, toAssetId } = req.query;
 
     const where: any = {
       orgId: req.org.id,
@@ -26,18 +26,18 @@ router.get('/', requirePermission('inventory.swaps.view'), async (req, res) => {
       where.employeeId = employeeId as string;
     }
 
-    if (fromItemId) {
-      where.fromItemId = fromItemId as string;
+    if (fromAssetId) {
+      where.fromAssetId = fromAssetId as string;
     }
 
-    if (toItemId) {
-      where.toItemId = toItemId as string;
+    if (toAssetId) {
+      where.toAssetId = toAssetId as string;
     }
 
-    const swaps = await prisma.inventorySwap.findMany({
+    const swaps = await prisma.assetSwap.findMany({
       where,
       include: {
-        fromItem: {
+        fromAsset: {
           select: {
             id: true,
             name: true,
@@ -47,7 +47,7 @@ router.get('/', requirePermission('inventory.swaps.view'), async (req, res) => {
             },
           },
         },
-        toItem: {
+        toAsset: {
           select: {
             id: true,
             name: true,
@@ -98,8 +98,8 @@ router.get('/', requirePermission('inventory.swaps.view'), async (req, res) => {
   }
 });
 
-// GET /api/inventory/swaps/:id
-router.get('/:id', requirePermission('inventory.swaps.view'), async (req, res) => {
+// GET /api/hr/assets/swaps/:id
+router.get('/:id', requirePermission('hr.assets.swaps.view'), async (req, res) => {
   try {
     if (!req.org) {
       res.status(401).json({ error: 'Unauthorized' });
@@ -108,19 +108,19 @@ router.get('/:id', requirePermission('inventory.swaps.view'), async (req, res) =
 
     const { id } = req.params;
 
-    const swap = await prisma.inventorySwap.findFirst({
+    const swap = await prisma.assetSwap.findFirst({
       where: {
         id,
         orgId: req.org.id,
       },
       include: {
-        fromItem: {
+        fromAsset: {
           include: {
             category: true,
             images: true,
           },
         },
-        toItem: {
+        toAsset: {
           include: {
             category: true,
             images: true,
@@ -184,38 +184,38 @@ router.get('/:id', requirePermission('inventory.swaps.view'), async (req, res) =
   }
 });
 
-// POST /api/inventory/swaps
-router.post('/', requirePermission('inventory.swaps.create'), async (req, res) => {
+// POST /api/hr/assets/swaps
+router.post('/', requirePermission('hr.assets.swaps.create'), async (req, res) => {
   try {
     if (!req.org || !req.user) {
       res.status(401).json({ error: 'Unauthorized' });
       return;
     }
 
-    const { fromItemId, toItemId, employeeId, fromAssignmentId, quantity, reason } = req.body;
+    const { fromAssetId, toAssetId, employeeId, fromAssignmentId, quantity, reason } = req.body;
 
-    if (!fromItemId || !toItemId || !employeeId || !quantity) {
-      res.status(400).json({ error: 'From item ID, to item ID, employee ID, and quantity are required' });
+    if (!fromAssetId || !toAssetId || !employeeId || !quantity) {
+      res.status(400).json({ error: 'From asset ID, to asset ID, employee ID, and quantity are required' });
       return;
     }
 
-    // Check if items exist
-    const fromItem = await prisma.inventoryItem.findFirst({
+    // Check if assets exist
+    const fromAsset = await prisma.employeeAsset.findFirst({
       where: {
-        id: fromItemId,
+        id: fromAssetId,
         orgId: req.org.id,
       },
     });
 
-    const toItem = await prisma.inventoryItem.findFirst({
+    const toAsset = await prisma.employeeAsset.findFirst({
       where: {
-        id: toItemId,
+        id: toAssetId,
         orgId: req.org.id,
       },
     });
 
-    if (!fromItem || !toItem) {
-      res.status(404).json({ error: 'One or both items not found' });
+    if (!fromAsset || !toAsset) {
+      res.status(404).json({ error: 'One or both assets not found' });
       return;
     }
 
@@ -234,7 +234,7 @@ router.post('/', requirePermission('inventory.swaps.create'), async (req, res) =
 
     // Check if fromAssignment exists (if provided)
     if (fromAssignmentId) {
-      const assignment = await prisma.inventoryAssignment.findFirst({
+      const assignment = await prisma.assetAssignment.findFirst({
         where: {
           id: fromAssignmentId,
           orgId: req.org.id,
@@ -249,7 +249,7 @@ router.post('/', requirePermission('inventory.swaps.create'), async (req, res) =
       }
 
       // Check if assignment has enough quantity
-      const returnedQuantity = await prisma.inventoryReturn.aggregate({
+      const returnedQuantity = await prisma.assetReturn.aggregate({
         where: {
           assignmentId: fromAssignmentId,
         },
@@ -267,10 +267,10 @@ router.post('/', requirePermission('inventory.swaps.create'), async (req, res) =
       }
     }
 
-    // Check available quantity for toItem
-    const activeAssignments = await prisma.inventoryAssignment.aggregate({
+    // Check available quantity for toAsset
+    const activeAssignments = await prisma.assetAssignment.aggregate({
       where: {
-        itemId: toItemId,
+        assetId: toAssetId,
         status: { in: ['approved', 'active'] },
       },
       _sum: {
@@ -279,20 +279,20 @@ router.post('/', requirePermission('inventory.swaps.create'), async (req, res) =
     });
 
     const assignedQuantity = activeAssignments._sum.quantity || 0;
-    const availableQuantity = toItem.quantity - assignedQuantity;
+    const availableQuantity = toAsset.quantity - assignedQuantity;
 
     if (quantity > availableQuantity) {
       res.status(400).json({
-        error: `Insufficient quantity in target item. Available: ${availableQuantity}, Requested: ${quantity}`,
+        error: `Insufficient quantity in target asset. Available: ${availableQuantity}, Requested: ${quantity}`,
       });
       return;
     }
 
-    const swap = await prisma.inventorySwap.create({
+    const swap = await prisma.assetSwap.create({
       data: {
         orgId: req.org.id,
-        fromItemId,
-        toItemId,
+        fromAssetId,
+        toAssetId,
         employeeId,
         fromAssignmentId: fromAssignmentId || null,
         quantity,
@@ -301,14 +301,14 @@ router.post('/', requirePermission('inventory.swaps.create'), async (req, res) =
         status: 'pending', // Requires approval
       },
       include: {
-        fromItem: {
+        fromAsset: {
           select: {
             id: true,
             name: true,
             sku: true,
           },
         },
-        toItem: {
+        toAsset: {
           select: {
             id: true,
             name: true,
@@ -339,8 +339,8 @@ router.post('/', requirePermission('inventory.swaps.create'), async (req, res) =
   }
 });
 
-// PUT /api/inventory/swaps/:id/approve
-router.put('/:id/approve', requirePermission('inventory.swaps.approve'), async (req, res) => {
+// PUT /api/hr/assets/swaps/:id/approve
+router.put('/:id/approve', requirePermission('hr.assets.swaps.approve'), async (req, res) => {
   try {
     if (!req.org || !req.user) {
       res.status(401).json({ error: 'Unauthorized' });
@@ -349,15 +349,15 @@ router.put('/:id/approve', requirePermission('inventory.swaps.approve'), async (
 
     const { id } = req.params;
 
-    const swap = await prisma.inventorySwap.findFirst({
+    const swap = await prisma.assetSwap.findFirst({
       where: {
         id,
         orgId: req.org.id,
         status: 'pending',
       },
       include: {
-        fromItem: true,
-        toItem: true,
+        fromAsset: true,
+        toAsset: true,
         fromAssignment: true,
       },
     });
@@ -367,10 +367,10 @@ router.put('/:id/approve', requirePermission('inventory.swaps.approve'), async (
       return;
     }
 
-    // Check available quantity for toItem again
-    const activeAssignments = await prisma.inventoryAssignment.aggregate({
+    // Check available quantity for toAsset again
+    const activeAssignments = await prisma.assetAssignment.aggregate({
       where: {
-        itemId: swap.toItemId,
+        assetId: swap.toAssetId,
         status: { in: ['approved', 'active'] },
       },
       _sum: {
@@ -379,17 +379,17 @@ router.put('/:id/approve', requirePermission('inventory.swaps.approve'), async (
     });
 
     const assignedQuantity = activeAssignments._sum.quantity || 0;
-    const availableQuantity = swap.toItem.quantity - assignedQuantity;
+    const availableQuantity = swap.toAsset.quantity - assignedQuantity;
 
     if (swap.quantity > availableQuantity) {
       res.status(400).json({
-        error: `Insufficient quantity in target item. Available: ${availableQuantity}, Requested: ${swap.quantity}`,
+        error: `Insufficient quantity in target asset. Available: ${availableQuantity}, Requested: ${swap.quantity}`,
       });
       return;
     }
 
     // Update swap status
-    const updated = await prisma.inventorySwap.update({
+    const updated = await prisma.assetSwap.update({
       where: { id },
       data: {
         status: 'approved',
@@ -400,14 +400,14 @@ router.put('/:id/approve', requirePermission('inventory.swaps.approve'), async (
 
     // If there's a fromAssignment, create a return for it
     if (swap.fromAssignmentId) {
-      await prisma.inventoryReturn.create({
+      await prisma.assetReturn.create({
         data: {
           orgId: req.org.id,
           assignmentId: swap.fromAssignmentId,
-          itemId: swap.fromItemId,
+          assetId: swap.fromAssetId,
           employeeId: swap.employeeId,
           quantity: swap.quantity,
-          returnReason: `Swapped for ${swap.toItem.name}`,
+          returnReason: `Swapped for ${swap.toAsset.name}`,
           condition: 'good',
           processedById: req.user.id,
           processedAt: new Date(),
@@ -415,7 +415,7 @@ router.put('/:id/approve', requirePermission('inventory.swaps.approve'), async (
       });
 
       // Update assignment if fully swapped
-      const assignment = await prisma.inventoryAssignment.findFirst({
+      const assignment = await prisma.assetAssignment.findFirst({
         where: { id: swap.fromAssignmentId },
         include: {
           returns: {
@@ -429,7 +429,7 @@ router.put('/:id/approve', requirePermission('inventory.swaps.approve'), async (
       if (assignment) {
         const returnedQuantity = assignment.returns.reduce((sum, r) => sum + r.quantity, 0);
         if (returnedQuantity >= assignment.quantity) {
-          await prisma.inventoryAssignment.update({
+          await prisma.assetAssignment.update({
             where: { id: swap.fromAssignmentId },
             data: {
               status: 'returned',
@@ -439,9 +439,9 @@ router.put('/:id/approve', requirePermission('inventory.swaps.approve'), async (
         }
       }
 
-      // Update fromItem quantity
-      await prisma.inventoryItem.update({
-        where: { id: swap.fromItemId },
+      // Update fromAsset quantity
+      await prisma.employeeAsset.update({
+        where: { id: swap.fromAssetId },
         data: {
           quantity: {
             increment: swap.quantity,
@@ -450,14 +450,14 @@ router.put('/:id/approve', requirePermission('inventory.swaps.approve'), async (
       });
     }
 
-    // Create new assignment for toItem
-    const newAssignment = await prisma.inventoryAssignment.create({
+    // Create new assignment for toAsset
+    const newAssignment = await prisma.assetAssignment.create({
       data: {
         orgId: req.org.id,
-        itemId: swap.toItemId,
+        assetId: swap.toAssetId,
         employeeId: swap.employeeId,
         quantity: swap.quantity,
-        reason: `Swapped from ${swap.fromItem.name}`,
+        reason: `Swapped from ${swap.fromAsset.name}`,
         requestedById: req.user.id,
         approvedById: req.user.id,
         approvedAt: new Date(),
@@ -465,9 +465,9 @@ router.put('/:id/approve', requirePermission('inventory.swaps.approve'), async (
       },
     });
 
-    // Update toItem quantity
-    await prisma.inventoryItem.update({
-      where: { id: swap.toItemId },
+    // Update toAsset quantity
+    await prisma.employeeAsset.update({
+      where: { id: swap.toAssetId },
       data: {
         quantity: {
           decrement: swap.quantity,
@@ -476,7 +476,7 @@ router.put('/:id/approve', requirePermission('inventory.swaps.approve'), async (
     });
 
     // Mark swap as completed
-    await prisma.inventorySwap.update({
+    await prisma.assetSwap.update({
       where: { id },
       data: {
         status: 'completed',
@@ -484,17 +484,17 @@ router.put('/:id/approve', requirePermission('inventory.swaps.approve'), async (
       },
     });
 
-    const finalSwap = await prisma.inventorySwap.findFirst({
+    const finalSwap = await prisma.assetSwap.findFirst({
       where: { id },
       include: {
-        fromItem: {
+        fromAsset: {
           select: {
             id: true,
             name: true,
             sku: true,
           },
         },
-        toItem: {
+        toAsset: {
           select: {
             id: true,
             name: true,
@@ -525,8 +525,8 @@ router.put('/:id/approve', requirePermission('inventory.swaps.approve'), async (
   }
 });
 
-// PUT /api/inventory/swaps/:id/reject
-router.put('/:id/reject', requirePermission('inventory.swaps.approve'), async (req, res) => {
+// PUT /api/hr/assets/swaps/:id/reject
+router.put('/:id/reject', requirePermission('hr.assets.swaps.approve'), async (req, res) => {
   try {
     if (!req.org || !req.user) {
       res.status(401).json({ error: 'Unauthorized' });
@@ -536,7 +536,7 @@ router.put('/:id/reject', requirePermission('inventory.swaps.approve'), async (r
     const { id } = req.params;
     const { rejectionReason } = req.body;
 
-    const swap = await prisma.inventorySwap.findFirst({
+    const swap = await prisma.assetSwap.findFirst({
       where: {
         id,
         orgId: req.org.id,
@@ -549,7 +549,7 @@ router.put('/:id/reject', requirePermission('inventory.swaps.approve'), async (r
       return;
     }
 
-    const updated = await prisma.inventorySwap.update({
+    const updated = await prisma.assetSwap.update({
       where: { id },
       data: {
         status: 'rejected',
@@ -558,14 +558,14 @@ router.put('/:id/reject', requirePermission('inventory.swaps.approve'), async (r
         rejectionReason: rejectionReason || null,
       },
       include: {
-        fromItem: {
+        fromAsset: {
           select: {
             id: true,
             name: true,
             sku: true,
           },
         },
-        toItem: {
+        toAsset: {
           select: {
             id: true,
             name: true,
@@ -597,17 +597,5 @@ router.put('/:id/reject', requirePermission('inventory.swaps.approve'), async (r
 });
 
 export default router;
-
-
-
-
-
-
-
-
-
-
-
-
 
 

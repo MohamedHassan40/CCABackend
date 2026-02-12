@@ -20,7 +20,6 @@ import { registerHrModule } from './modules/hr';
 import { registerTicketingModule } from './modules/ticketing';
 import { registerBillingModule } from './modules/billing';
 import { registerMarketplaceModule } from './modules/marketplace';
-import { registerInventoryModule } from './modules/inventory';
 import { securityHeaders } from './middleware/security';
 
 // Create app without starting server
@@ -62,7 +61,6 @@ registerHrModule(mainRouter);
 registerTicketingModule(mainRouter);
 registerBillingModule(mainRouter);
 registerMarketplaceModule(mainRouter);
-registerInventoryModule(mainRouter);
 app.use(mainRouter);
 
 // Error handler

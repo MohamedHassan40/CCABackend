@@ -1,18 +1,18 @@
 import { Router } from 'express';
-import prisma from '../../core/db';
-import { requirePermission } from '../../middleware/permissions';
+import prisma from '../../../core/db';
+import { requirePermission } from '../../../middleware/permissions';
 
 const router = Router();
 
-// GET /api/inventory/assignments
-router.get('/', requirePermission('inventory.assignments.view'), async (req, res) => {
+// GET /api/hr/assets/assignments
+router.get('/', requirePermission('hr.assets.assignments.view'), async (req, res) => {
   try {
     if (!req.org) {
       res.status(401).json({ error: 'Unauthorized' });
       return;
     }
 
-    const { status, employeeId, itemId } = req.query;
+    const { status, employeeId, assetId } = req.query;
 
     const where: any = {
       orgId: req.org.id,
@@ -26,14 +26,14 @@ router.get('/', requirePermission('inventory.assignments.view'), async (req, res
       where.employeeId = employeeId as string;
     }
 
-    if (itemId) {
-      where.itemId = itemId as string;
+    if (assetId) {
+      where.assetId = assetId as string;
     }
 
-    const assignments = await prisma.inventoryAssignment.findMany({
+    const assignments = await prisma.assetAssignment.findMany({
       where,
       include: {
-        item: {
+        asset: {
           select: {
             id: true,
             name: true,
@@ -79,8 +79,8 @@ router.get('/', requirePermission('inventory.assignments.view'), async (req, res
   }
 });
 
-// GET /api/inventory/assignments/:id
-router.get('/:id', requirePermission('inventory.assignments.view'), async (req, res) => {
+// GET /api/hr/assets/assignments/:id
+router.get('/:id', requirePermission('hr.assets.assignments.view'), async (req, res) => {
   try {
     if (!req.org) {
       res.status(401).json({ error: 'Unauthorized' });
@@ -89,13 +89,13 @@ router.get('/:id', requirePermission('inventory.assignments.view'), async (req, 
 
     const { id } = req.params;
 
-    const assignment = await prisma.inventoryAssignment.findFirst({
+    const assignment = await prisma.assetAssignment.findFirst({
       where: {
         id,
         orgId: req.org.id,
       },
       include: {
-        item: {
+        asset: {
           include: {
             category: true,
             images: true,
@@ -146,38 +146,38 @@ router.get('/:id', requirePermission('inventory.assignments.view'), async (req, 
   }
 });
 
-// POST /api/inventory/assignments
-router.post('/', requirePermission('inventory.assignments.create'), async (req, res) => {
+// POST /api/hr/assets/assignments
+router.post('/', requirePermission('hr.assets.assignments.create'), async (req, res) => {
   try {
     if (!req.org || !req.user) {
       res.status(401).json({ error: 'Unauthorized' });
       return;
     }
 
-    const { itemId, employeeId, quantity, expectedReturnDate, reason } = req.body;
+    const { assetId, employeeId, quantity, expectedReturnDate, reason } = req.body;
 
-    if (!itemId || !employeeId || !quantity) {
-      res.status(400).json({ error: 'Item ID, employee ID, and quantity are required' });
+    if (!assetId || !employeeId || !quantity) {
+      res.status(400).json({ error: 'Asset ID, employee ID, and quantity are required' });
       return;
     }
 
-    // Check if item exists and has enough quantity
-    const item = await prisma.inventoryItem.findFirst({
+    // Check if asset exists and has enough quantity
+    const asset = await prisma.employeeAsset.findFirst({
       where: {
-        id: itemId,
+        id: assetId,
         orgId: req.org.id,
       },
     });
 
-    if (!item) {
-      res.status(404).json({ error: 'Item not found' });
+    if (!asset) {
+      res.status(404).json({ error: 'Asset not found' });
       return;
     }
 
     // Check available quantity (total - assigned)
-    const activeAssignments = await prisma.inventoryAssignment.aggregate({
+    const activeAssignments = await prisma.assetAssignment.aggregate({
       where: {
-        itemId,
+        assetId,
         status: { in: ['approved', 'active'] },
       },
       _sum: {
@@ -186,7 +186,7 @@ router.post('/', requirePermission('inventory.assignments.create'), async (req, 
     });
 
     const assignedQuantity = activeAssignments._sum.quantity || 0;
-    const availableQuantity = item.quantity - assignedQuantity;
+    const availableQuantity = asset.quantity - assignedQuantity;
 
     if (quantity > availableQuantity) {
       res.status(400).json({
@@ -208,10 +208,10 @@ router.post('/', requirePermission('inventory.assignments.create'), async (req, 
       return;
     }
 
-    const assignment = await prisma.inventoryAssignment.create({
+    const assignment = await prisma.assetAssignment.create({
       data: {
         orgId: req.org.id,
-        itemId,
+        assetId,
         employeeId,
         quantity,
         expectedReturnDate: expectedReturnDate ? new Date(expectedReturnDate) : null,
@@ -220,7 +220,7 @@ router.post('/', requirePermission('inventory.assignments.create'), async (req, 
         status: 'pending', // Requires approval
       },
       include: {
-        item: {
+        asset: {
           select: {
             id: true,
             name: true,
@@ -251,8 +251,8 @@ router.post('/', requirePermission('inventory.assignments.create'), async (req, 
   }
 });
 
-// PUT /api/inventory/assignments/:id/approve
-router.put('/:id/approve', requirePermission('inventory.assignments.approve'), async (req, res) => {
+// PUT /api/hr/assets/assignments/:id/approve
+router.put('/:id/approve', requirePermission('hr.assets.assignments.approve'), async (req, res) => {
   try {
     if (!req.org || !req.user) {
       res.status(401).json({ error: 'Unauthorized' });
@@ -261,14 +261,14 @@ router.put('/:id/approve', requirePermission('inventory.assignments.approve'), a
 
     const { id } = req.params;
 
-    const assignment = await prisma.inventoryAssignment.findFirst({
+    const assignment = await prisma.assetAssignment.findFirst({
       where: {
         id,
         orgId: req.org.id,
         status: 'pending',
       },
       include: {
-        item: true,
+        asset: true,
       },
     });
 
@@ -278,9 +278,9 @@ router.put('/:id/approve', requirePermission('inventory.assignments.approve'), a
     }
 
     // Check available quantity again
-    const activeAssignments = await prisma.inventoryAssignment.aggregate({
+    const activeAssignments = await prisma.assetAssignment.aggregate({
       where: {
-        itemId: assignment.itemId,
+        assetId: assignment.assetId,
         status: { in: ['approved', 'active'] },
         id: { not: id },
       },
@@ -290,7 +290,7 @@ router.put('/:id/approve', requirePermission('inventory.assignments.approve'), a
     });
 
     const assignedQuantity = activeAssignments._sum.quantity || 0;
-    const availableQuantity = assignment.item.quantity - assignedQuantity;
+    const availableQuantity = assignment.asset.quantity - assignedQuantity;
 
     if (assignment.quantity > availableQuantity) {
       res.status(400).json({
@@ -299,7 +299,7 @@ router.put('/:id/approve', requirePermission('inventory.assignments.approve'), a
       return;
     }
 
-    const updated = await prisma.inventoryAssignment.update({
+    const updated = await prisma.assetAssignment.update({
       where: { id },
       data: {
         status: 'active',
@@ -307,7 +307,7 @@ router.put('/:id/approve', requirePermission('inventory.assignments.approve'), a
         approvedAt: new Date(),
       },
       include: {
-        item: {
+        asset: {
           select: {
             id: true,
             name: true,
@@ -338,8 +338,8 @@ router.put('/:id/approve', requirePermission('inventory.assignments.approve'), a
   }
 });
 
-// PUT /api/inventory/assignments/:id/reject
-router.put('/:id/reject', requirePermission('inventory.assignments.approve'), async (req, res) => {
+// PUT /api/hr/assets/assignments/:id/reject
+router.put('/:id/reject', requirePermission('hr.assets.assignments.approve'), async (req, res) => {
   try {
     if (!req.org || !req.user) {
       res.status(401).json({ error: 'Unauthorized' });
@@ -349,7 +349,7 @@ router.put('/:id/reject', requirePermission('inventory.assignments.approve'), as
     const { id } = req.params;
     const { rejectionReason } = req.body;
 
-    const assignment = await prisma.inventoryAssignment.findFirst({
+    const assignment = await prisma.assetAssignment.findFirst({
       where: {
         id,
         orgId: req.org.id,
@@ -362,7 +362,7 @@ router.put('/:id/reject', requirePermission('inventory.assignments.approve'), as
       return;
     }
 
-    const updated = await prisma.inventoryAssignment.update({
+    const updated = await prisma.assetAssignment.update({
       where: { id },
       data: {
         status: 'rejected',
@@ -371,7 +371,7 @@ router.put('/:id/reject', requirePermission('inventory.assignments.approve'), as
         rejectionReason: rejectionReason || null,
       },
       include: {
-        item: {
+        asset: {
           select: {
             id: true,
             name: true,
@@ -402,8 +402,8 @@ router.put('/:id/reject', requirePermission('inventory.assignments.approve'), as
   }
 });
 
-// PUT /api/inventory/assignments/:id/cancel
-router.put('/:id/cancel', requirePermission('inventory.assignments.edit'), async (req, res) => {
+// PUT /api/hr/assets/assignments/:id/cancel
+router.put('/:id/cancel', requirePermission('hr.assets.assignments.edit'), async (req, res) => {
   try {
     if (!req.org) {
       res.status(401).json({ error: 'Unauthorized' });
@@ -412,7 +412,7 @@ router.put('/:id/cancel', requirePermission('inventory.assignments.edit'), async
 
     const { id } = req.params;
 
-    const assignment = await prisma.inventoryAssignment.findFirst({
+    const assignment = await prisma.assetAssignment.findFirst({
       where: {
         id,
         orgId: req.org.id,
@@ -425,7 +425,7 @@ router.put('/:id/cancel', requirePermission('inventory.assignments.edit'), async
       return;
     }
 
-    const updated = await prisma.inventoryAssignment.update({
+    const updated = await prisma.assetAssignment.update({
       where: { id },
       data: {
         status: 'cancelled',
@@ -440,17 +440,5 @@ router.put('/:id/cancel', requirePermission('inventory.assignments.edit'), async
 });
 
 export default router;
-
-
-
-
-
-
-
-
-
-
-
-
 
 

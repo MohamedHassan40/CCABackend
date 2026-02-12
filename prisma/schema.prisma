@@ -57,6 +57,11 @@ model User {
   announcementCreatedBy  Announcement[]         @relation("AnnouncementCreatedBy")
   conversationAssignedTo Conversation[]         @relation("ConversationAssignedTo")
   absenceDeductionDecisions AbsenceDeductionDecision[] @relation("DeductionDecisionCreatedBy")
+  createdComplaints        EmployeeComplaint[]  @relation("ComplaintCreatedBy")
+  resolvedComplaints        EmployeeComplaint[]  @relation("ComplaintResolvedBy")
+  createdEmployeeRequests   EmployeeRequest[]   @relation("RequestCreatedBy")
+  approvedEmployeeRequests  EmployeeRequest[]   @relation("RequestApprovedBy")
+  createdHrAnnouncements   HrAnnouncement[]    @relation("HrAnnouncementCreatedBy")
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -104,8 +109,8 @@ model Organization {
   JobApplication      JobApplication[]
   PerformanceReview   PerformanceReview[]
   Goal                Goal[]
-  InventoryItem       InventoryItem[]
-  InventoryCategory   InventoryCategory[]
+  EmployeeAsset       EmployeeAsset[]
+  AssetCategory       AssetCategory[]
   InventoryAssignment InventoryAssignment[]
   InventoryReturn     InventoryReturn[]
   InventoryDamage     InventoryDamage[]
@@ -127,6 +132,11 @@ model Organization {
   tasks               Task[]
   taskTrackers        TaskTracker[]
   calendarEvents      CalendarEvent[]
+  employeeComplaints  EmployeeComplaint[]
+  employeeRequests    EmployeeRequest[]
+  hrAnnouncements     HrAnnouncement[]
+  employeeAssets      EmployeeAsset[]
+  assetCategories     AssetCategory[]
   absenceDeductionDecisions AbsenceDeductionDecision[]
 
   @@index([status])
@@ -374,15 +384,18 @@ model Employee {
   jobApplications      JobApplication[]
   performanceReviews   PerformanceReview[]
   goals                Goal[]
-  inventoryAssignments InventoryAssignment[]
-  inventoryReturns     InventoryReturn[]
-  inventoryDamages     InventoryDamage[]
-  inventorySwaps       InventorySwap[]
+  assetAssignments      AssetAssignment[]
+  assetReturns          AssetReturn[]
+  assetDamages          AssetDamage[]
+  assetSwaps            AssetSwap[]
   projectManagers      ProjectManager[]
   tasks                Task[]
   taskTrackers         TaskTracker[]
   calendarEvents       CalendarEvent[]
   absenceDeductionDecisions AbsenceDeductionDecision[]
+  complaints          EmployeeComplaint[]
+  requests            EmployeeRequest[]
+  hrAnnouncementViews HrAnnouncementView[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -410,6 +423,116 @@ model AbsenceDeductionDecision {
   @@index([orgId])
   @@index([employeeId])
   @@index([decisionDate])
+}
+
+// Employee Complaints
+model EmployeeComplaint {
+  id          String    @id @default(cuid())
+  orgId       String
+  employeeId  String
+  title       String
+  description String
+  category    String? // "workplace", "harassment", "discrimination", "safety", "other"
+  priority    String    @default("medium") // "low", "medium", "high", "urgent"
+  status      String    @default("open") // "open", "investigating", "resolved", "closed", "dismissed"
+  createdById String?
+  resolvedById String?
+  resolvedAt  DateTime?
+  resolution  String?
+  isAnonymous Boolean   @default(false)
+
+  organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  employee     Employee     @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  createdBy    User?        @relation("ComplaintCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  resolvedBy   User?        @relation("ComplaintResolvedBy", fields: [resolvedById], references: [id], onDelete: SetNull)
+  attachments  File[]        @relation("ComplaintAttachments")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([orgId])
+  @@index([employeeId])
+  @@index([status])
+  @@index([priority])
+  @@index([createdAt])
+}
+
+// Employee General Requests
+model EmployeeRequest {
+  id          String    @id @default(cuid())
+  orgId       String
+  employeeId  String
+  requestType String    // "equipment", "training", "transfer", "promotion", "salary_review", "other"
+  title       String
+  description String
+  priority    String    @default("medium") // "low", "medium", "high", "urgent"
+  status      String    @default("pending") // "pending", "approved", "rejected", "in_progress", "completed", "cancelled"
+  createdById String?
+  approvedById String?
+  approvedAt  DateTime?
+  rejectedAt  DateTime?
+  rejectionReason String?
+  completedAt DateTime?
+  notes       String?
+
+  organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  employee     Employee     @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  createdBy    User?        @relation("RequestCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  approvedBy   User?        @relation("RequestApprovedBy", fields: [approvedById], references: [id], onDelete: SetNull)
+  attachments  File[]        @relation("RequestAttachments")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([orgId])
+  @@index([employeeId])
+  @@index([status])
+  @@index([requestType])
+  @@index([priority])
+  @@index([createdAt])
+}
+
+// HR Announcements
+model HrAnnouncement {
+  id          String    @id @default(cuid())
+  orgId       String
+  title       String
+  content     String
+  type        String    @default("info") // "info", "warning", "success", "error", "important"
+  priority    String    @default("normal") // "low", "normal", "high", "urgent"
+  targetAudience String @default("all") // "all", "department", "specific_employees"
+  department  String? // If targetAudience is "department"
+  isPublished Boolean   @default(false)
+  publishedAt DateTime?
+  expiresAt  DateTime?
+  createdById String
+
+  organization Organization        @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  createdBy    User                @relation("HrAnnouncementCreatedBy", fields: [createdById], references: [id], onDelete: Cascade)
+  views        HrAnnouncementView[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([orgId])
+  @@index([isPublished])
+  @@index([publishedAt])
+  @@index([expiresAt])
+  @@index([targetAudience])
+}
+
+model HrAnnouncementView {
+  id             String   @id @default(cuid())
+  announcementId String
+  employeeId      String
+  viewedAt       DateTime @default(now())
+
+  announcement HrAnnouncement @relation(fields: [announcementId], references: [id], onDelete: Cascade)
+  employee     Employee       @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  @@unique([announcementId, employeeId])
+  @@index([announcementId])
+  @@index([employeeId])
 }
 
 // Leave Management
@@ -935,9 +1058,12 @@ model File {
   entityId        String? // ID of related entity
   employeeId      String? // For employee documents
   ticketId        String? // For ticket attachments
-  inventoryItemId String? // For inventory item images
+  inventoryItemId String? // For inventory item images (deprecated - use assetId)
+  assetId         String? // For employee asset images
   folderId        String? // For document management folders
   documentId      String? // For document management (main document record)
+  complaintId     String? // For complaint attachments
+  requestId       String? // For employee request attachments
   isVersion       Boolean @default(false) // If this is a version of a document
   versionNumber   Int? // Version number
   parentVersionId String? // Parent version ID for document versions
@@ -947,10 +1073,13 @@ model File {
   employee         Employee?         @relation("EmployeeDocuments", fields: [employeeId], references: [id], onDelete: Cascade)
   ticket           Ticket?           @relation("TicketAttachments", fields: [ticketId], references: [id], onDelete: Cascade)
   inventoryItem    InventoryItem?    @relation("InventoryItemImages", fields: [inventoryItemId], references: [id], onDelete: Cascade)
+  employeeAsset    EmployeeAsset?    @relation("EmployeeAssetImages", fields: [assetId], references: [id], onDelete: Cascade)
   projectDocuments ProjectDocument[] @relation("ProjectDocuments")
   documentFolder   DocumentFolder?   @relation("FolderFiles", fields: [folderId], references: [id], onDelete: SetNull)
   document         Document?         @relation("DocumentFiles", fields: [documentId], references: [id], onDelete: Cascade)
   parentVersion    File?             @relation("DocumentVersions", fields: [parentVersionId], references: [id], onDelete: Cascade)
+  complaint        EmployeeComplaint? @relation("ComplaintAttachments", fields: [complaintId], references: [id], onDelete: Cascade)
+  employeeRequest  EmployeeRequest?  @relation("RequestAttachments", fields: [requestId], references: [id], onDelete: Cascade)
   versions         File[]            @relation("DocumentVersions")
 
   createdAt DateTime @default(now())
@@ -962,15 +1091,16 @@ model File {
   @@index([employeeId])
   @@index([ticketId])
   @@index([inventoryItemId])
+  @@index([assetId])
   @@index([folderId])
   @@index([documentId])
 }
 
 // ============================================
-// INVENTORY MODULE
+// EMPLOYEE ASSETS MODULE (HR)
 // ============================================
 
-model InventoryItem {
+model EmployeeAsset {
   id          String  @id @default(cuid())
   orgId       String
   name        String
@@ -989,13 +1119,13 @@ model InventoryItem {
   notes       String?
 
   organization Organization          @relation(fields: [orgId], references: [id], onDelete: Cascade)
-  category     InventoryCategory?    @relation(fields: [categoryId], references: [id], onDelete: SetNull)
-  images       File[]                @relation("InventoryItemImages")
-  assignments  InventoryAssignment[]
-  returns      InventoryReturn[]
-  damages      InventoryDamage[]
-  swaps        InventorySwap[]       @relation("SwapFromItem")
-  swapTargets  InventorySwap[]       @relation("SwapToItem")
+  category     AssetCategory?        @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  images       File[]                @relation("EmployeeAssetImages")
+  assignments  AssetAssignment[]
+  returns      AssetReturn[]
+  damages      AssetDamage[]
+  swaps        AssetSwap[]           @relation("SwapFromAsset")
+  swapTargets  AssetSwap[]           @relation("SwapToAsset")
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -1006,7 +1136,7 @@ model InventoryItem {
   @@index([sku])
 }
 
-model InventoryCategory {
+model AssetCategory {
   id          String  @id @default(cuid())
   orgId       String
   name        String
@@ -1014,7 +1144,7 @@ model InventoryCategory {
   isActive    Boolean @default(true)
 
   organization Organization    @relation(fields: [orgId], references: [id], onDelete: Cascade)
-  items        InventoryItem[]
+  assets       EmployeeAsset[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -1023,10 +1153,10 @@ model InventoryCategory {
   @@index([orgId])
 }
 
-model InventoryAssignment {
+model AssetAssignment {
   id                 String    @id @default(cuid())
   orgId              String
-  itemId             String
+  assetId            String
   employeeId         String
   quantity           Int       @default(1)
   assignedDate       DateTime  @default(now())
@@ -1041,29 +1171,29 @@ model InventoryAssignment {
   returnNotes        String?
 
   organization Organization      @relation(fields: [orgId], references: [id], onDelete: Cascade)
-  item         InventoryItem     @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  asset         EmployeeAsset     @relation(fields: [assetId], references: [id], onDelete: Cascade)
   employee     Employee          @relation(fields: [employeeId], references: [id], onDelete: Cascade)
   requestedBy  User?             @relation("RequestedAssignments", fields: [requestedById], references: [id], onDelete: SetNull)
   approvedBy   User?             @relation("ApprovedAssignments", fields: [approvedById], references: [id], onDelete: SetNull)
-  returns      InventoryReturn[]
-  damages      InventoryDamage[]
-  swaps        InventorySwap[]
+  returns      AssetReturn[]
+  damages      AssetDamage[]
+  swaps        AssetSwap[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@index([orgId])
-  @@index([itemId])
+  @@index([assetId])
   @@index([employeeId])
   @@index([status])
   @@index([assignedDate])
 }
 
-model InventoryReturn {
+model AssetReturn {
   id            String    @id @default(cuid())
   orgId         String
   assignmentId  String
-  itemId        String
+  assetId       String
   employeeId    String
   quantity      Int       @default(1)
   returnDate    DateTime  @default(now())
@@ -1074,8 +1204,8 @@ model InventoryReturn {
   processedAt   DateTime?
 
   organization Organization        @relation(fields: [orgId], references: [id], onDelete: Cascade)
-  assignment   InventoryAssignment @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
-  item         InventoryItem       @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  assignment   AssetAssignment      @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
+  asset        EmployeeAsset        @relation(fields: [assetId], references: [id], onDelete: Cascade)
   employee     Employee            @relation(fields: [employeeId], references: [id], onDelete: Cascade)
   processedBy  User?               @relation("ProcessedReturns", fields: [processedById], references: [id], onDelete: SetNull)
 
@@ -1084,15 +1214,15 @@ model InventoryReturn {
 
   @@index([orgId])
   @@index([assignmentId])
-  @@index([itemId])
+  @@index([assetId])
   @@index([employeeId])
   @@index([returnDate])
 }
 
-model InventoryDamage {
+model AssetDamage {
   id                       String    @id @default(cuid())
   orgId                    String
-  itemId                   String
+  assetId                  String
   employeeId               String? // If damage occurred while assigned
   assignmentId             String? // Related assignment if applicable
   damageDate               DateTime  @default(now())
@@ -1108,9 +1238,9 @@ model InventoryDamage {
   resolutionNotes          String?
 
   organization Organization         @relation(fields: [orgId], references: [id], onDelete: Cascade)
-  item         InventoryItem        @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  asset        EmployeeAsset        @relation(fields: [assetId], references: [id], onDelete: Cascade)
   employee     Employee?            @relation(fields: [employeeId], references: [id], onDelete: SetNull)
-  assignment   InventoryAssignment? @relation(fields: [assignmentId], references: [id], onDelete: SetNull)
+  assignment   AssetAssignment?     @relation(fields: [assignmentId], references: [id], onDelete: SetNull)
   reportedBy   User?                @relation("ReportedDamages", fields: [reportedById], references: [id], onDelete: SetNull)
   reviewedBy   User?                @relation("ReviewedDamages", fields: [reviewedById], references: [id], onDelete: SetNull)
 
@@ -1118,17 +1248,17 @@ model InventoryDamage {
   updatedAt DateTime @updatedAt
 
   @@index([orgId])
-  @@index([itemId])
+  @@index([assetId])
   @@index([employeeId])
   @@index([status])
   @@index([damageDate])
 }
 
-model InventorySwap {
+model AssetSwap {
   id               String    @id @default(cuid())
   orgId            String
-  fromItemId       String // Item being swapped out
-  toItemId         String // Item being swapped in
+  fromAssetId      String // Asset being swapped out
+  toAssetId        String // Asset being swapped in
   employeeId       String
   fromAssignmentId String? // Original assignment if applicable
   quantity         Int       @default(1)
@@ -1143,10 +1273,10 @@ model InventorySwap {
   notes            String?
 
   organization   Organization         @relation(fields: [orgId], references: [id], onDelete: Cascade)
-  fromItem       InventoryItem        @relation("SwapFromItem", fields: [fromItemId], references: [id], onDelete: Cascade)
-  toItem         InventoryItem        @relation("SwapToItem", fields: [toItemId], references: [id], onDelete: Cascade)
+  fromAsset      EmployeeAsset        @relation("SwapFromAsset", fields: [fromAssetId], references: [id], onDelete: Cascade)
+  toAsset        EmployeeAsset        @relation("SwapToAsset", fields: [toAssetId], references: [id], onDelete: Cascade)
   employee       Employee             @relation(fields: [employeeId], references: [id], onDelete: Cascade)
-  fromAssignment InventoryAssignment? @relation(fields: [fromAssignmentId], references: [id], onDelete: SetNull)
+  fromAssignment AssetAssignment?     @relation(fields: [fromAssignmentId], references: [id], onDelete: SetNull)
   requestedBy    User?                @relation("RequestedSwaps", fields: [requestedById], references: [id], onDelete: SetNull)
   approvedBy     User?                @relation("ApprovedSwaps", fields: [approvedById], references: [id], onDelete: SetNull)
 
@@ -1154,8 +1284,8 @@ model InventorySwap {
   updatedAt DateTime @updatedAt
 
   @@index([orgId])
-  @@index([fromItemId])
-  @@index([toItemId])
+  @@index([fromAssetId])
+  @@index([toAssetId])
   @@index([employeeId])
   @@index([status])
   @@index([swapDate])
