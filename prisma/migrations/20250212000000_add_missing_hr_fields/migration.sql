@@ -1,4 +1,4 @@
--- Add missing photoUrl column to Employee table if it doesn't exist
+-- Add missing columns to Employee table if they don't exist
 DO $$ 
 BEGIN
     IF NOT EXISTS (
@@ -6,6 +6,13 @@ BEGIN
         WHERE table_name = 'Employee' AND column_name = 'photoUrl'
     ) THEN
         ALTER TABLE "Employee" ADD COLUMN "photoUrl" TEXT;
+    END IF;
+    
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns 
+        WHERE table_name = 'Employee' AND column_name = 'phone'
+    ) THEN
+        ALTER TABLE "Employee" ADD COLUMN "phone" TEXT;
     END IF;
 END $$;
 

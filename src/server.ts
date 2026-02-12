@@ -34,7 +34,8 @@ initErrorTracking();
 const app = express();
 
 // Trust proxy - required for rate limiting behind reverse proxy (Railway, etc.)
-app.set('trust proxy', true);
+// Set to 1 to trust only the first proxy (Railway's reverse proxy)
+app.set('trust proxy', 1);
 
 // Security middleware (apply before other middleware)
 if (config.nodeEnv === 'production') {
