@@ -20,29 +20,36 @@ export function requirePermission(permissionKey: string) {
       }
 
       // Get user's memberships for this org
-      const membership = await prisma.membership.findUnique({
-        where: {
-          userId_organizationId: {
-            userId: req.user.id,
-            organizationId: req.org.id,
+      let membership;
+      try {
+        membership = await prisma.membership.findUnique({
+          where: {
+            userId_organizationId: {
+              userId: req.user.id,
+              organizationId: req.org.id,
+            },
           },
-        },
-        include: {
-          membershipRoles: {
-            include: {
-              role: {
-                include: {
-                  rolePermissions: {
-                    include: {
-                      permission: true,
+          include: {
+            membershipRoles: {
+              include: {
+                role: {
+                  include: {
+                    rolePermissions: {
+                      include: {
+                        permission: true,
+                      },
                     },
                   },
                 },
               },
             },
           },
-        },
-      });
+        });
+      } catch (dbError) {
+        console.error('Database error in requirePermission:', dbError);
+        res.status(500).json({ error: 'Database error while checking permissions' });
+        return;
+      }
 
       if (!membership || !membership.isActive) {
         res.status(403).json({ error: 'No active membership found' });

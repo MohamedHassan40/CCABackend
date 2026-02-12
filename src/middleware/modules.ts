@@ -23,18 +23,27 @@ export function requireModuleEnabled(moduleKey: string) {
         return;
       }
 
-      // Find the module
-      const module = await prisma.module.findUnique({
+    // Find the module
+    let module;
+    try {
+      module = await prisma.module.findUnique({
         where: { key: moduleKey },
       });
+    } catch (dbError) {
+      console.error('Database error in requireModuleEnabled (module lookup):', dbError);
+      res.status(500).json({ error: 'Database error while checking module' });
+      return;
+    }
 
-      if (!module || !module.isActive) {
-        res.status(404).json({ error: `Module not found: ${moduleKey}` });
-        return;
-      }
+    if (!module || !module.isActive) {
+      res.status(404).json({ error: `Module not found: ${moduleKey}` });
+      return;
+    }
 
-      // Check org module status
-      const orgModule = await prisma.orgModule.findUnique({
+    // Check org module status
+    let orgModule;
+    try {
+      orgModule = await prisma.orgModule.findUnique({
         where: {
           organizationId_moduleId: {
             organizationId: req.org.id,
@@ -42,6 +51,11 @@ export function requireModuleEnabled(moduleKey: string) {
           },
         },
       });
+    } catch (dbError) {
+      console.error('Database error in requireModuleEnabled (orgModule lookup):', dbError);
+      res.status(500).json({ error: 'Database error while checking module subscription' });
+      return;
+    }
 
       if (!orgModule || !orgModule.isEnabled) {
         res.status(403).json({ error: `Module ${moduleKey} is not enabled for this organization` });
