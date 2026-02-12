@@ -37,13 +37,13 @@ model User {
   carts                  Cart[]
   approvedLeaves         LeaveRequest[]         @relation("ApprovedLeaves")
   conductedReviews       PerformanceReview[]    @relation("ConductedReviews")
-  requestedAssignments   InventoryAssignment[]  @relation("RequestedAssignments")
-  approvedAssignments    InventoryAssignment[]  @relation("ApprovedAssignments")
-  processedReturns       InventoryReturn[]      @relation("ProcessedReturns")
-  reportedDamages        InventoryDamage[]      @relation("ReportedDamages")
-  reviewedDamages        InventoryDamage[]      @relation("ReviewedDamages")
-  requestedSwaps         InventorySwap[]        @relation("RequestedSwaps")
-  approvedSwaps          InventorySwap[]        @relation("ApprovedSwaps")
+  requestedAssignments   AssetAssignment[]  @relation("RequestedAssignments")
+  approvedAssignments    AssetAssignment[]  @relation("ApprovedAssignments")
+  processedReturns       AssetReturn[]      @relation("ProcessedReturns")
+  reportedDamages        AssetDamage[]      @relation("ReportedDamages")
+  reviewedDamages        AssetDamage[]      @relation("ReviewedDamages")
+  requestedSwaps         AssetSwap[]        @relation("RequestedSwaps")
+  approvedSwaps          AssetSwap[]        @relation("ApprovedSwaps")
   clientProjectManagers  ClientProjectManager[]
   documentCreated        Document[]             @relation("DocumentCreatedBy")
   assignedTasks          Task[]                 @relation("TaskAssignedBy")
@@ -109,12 +109,10 @@ model Organization {
   JobApplication      JobApplication[]
   PerformanceReview   PerformanceReview[]
   Goal                Goal[]
-  EmployeeAsset       EmployeeAsset[]
-  AssetCategory       AssetCategory[]
-  InventoryAssignment InventoryAssignment[]
-  InventoryReturn     InventoryReturn[]
-  InventoryDamage     InventoryDamage[]
-  InventorySwap       InventorySwap[]
+  AssetAssignment     AssetAssignment[]
+  AssetReturn         AssetReturn[]
+  AssetDamage         AssetDamage[]
+  AssetSwap           AssetSwap[]
   projects            Project[]
   documents           Document[]
   documentFolders     DocumentFolder[]
@@ -1072,7 +1070,6 @@ model File {
   user             User?             @relation(fields: [userId], references: [id], onDelete: SetNull)
   employee         Employee?         @relation("EmployeeDocuments", fields: [employeeId], references: [id], onDelete: Cascade)
   ticket           Ticket?           @relation("TicketAttachments", fields: [ticketId], references: [id], onDelete: Cascade)
-  inventoryItem    InventoryItem?    @relation("InventoryItemImages", fields: [inventoryItemId], references: [id], onDelete: Cascade)
   employeeAsset    EmployeeAsset?    @relation("EmployeeAssetImages", fields: [assetId], references: [id], onDelete: Cascade)
   projectDocuments ProjectDocument[] @relation("ProjectDocuments")
   documentFolder   DocumentFolder?   @relation("FolderFiles", fields: [folderId], references: [id], onDelete: SetNull)
