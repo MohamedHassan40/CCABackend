@@ -7,22 +7,30 @@ PRISMA_CLI="node node_modules/prisma/build/index.js"
 
 echo "🔄 Running database migrations..."
 
-# AGGRESSIVE CLEANUP: Delete failed migration records directly using raw SQL
+# AGGRESSIVE CLEANUP: Delete failed migration records using Node.js script
 echo "🔍 Cleaning up failed migrations..."
 set +e
 
-# Use Prisma's db execute to directly delete the failed migration record
-echo "   Deleting failed migration record from database..."
-echo "DELETE FROM \"_prisma_migrations\" WHERE migration_name = '20250212000002_ensure_all_hr_fields';" | $PRISMA_CLI db execute --stdin 2>&1 && {
-  echo "✅ Successfully deleted failed migration record"
-} || {
-  echo "⚠️  Could not delete via db execute, trying resolve command..."
-  $PRISMA_CLI migrate resolve --rolled-back "20250212000002_ensure_all_hr_fields" 2>&1 || {
-    echo "⚠️  Both methods failed. The migration record may not exist or database connection issue."
-    echo "💡 If migrations still fail, manually run this SQL on your database:"
-    echo "   DELETE FROM \"_prisma_migrations\" WHERE migration_name = '20250212000002_ensure_all_hr_fields';"
+# First, generate Prisma Client if needed
+if [ ! -f "node_modules/.prisma/client/index.js" ]; then
+  echo "   Generating Prisma Client..."
+  $PRISMA_CLI generate 2>&1 || echo "⚠️  Prisma generate failed, continuing..."
+fi
+
+# Run cleanup script
+if [ -f "scripts/cleanup-failed-migrations.js" ]; then
+  echo "   Running cleanup script..."
+  node scripts/cleanup-failed-migrations.js 2>&1 || {
+    echo "⚠️  Cleanup script failed, trying direct SQL..."
+    # Fallback: Try direct SQL via Prisma
+    echo "DELETE FROM \"_prisma_migrations\" WHERE migration_name = '20250212000002_ensure_all_hr_fields';" | $PRISMA_CLI db execute --stdin 2>&1 || {
+      echo "⚠️  Direct SQL also failed. Manual cleanup may be needed."
+    }
   }
-}
+else
+  echo "⚠️  Cleanup script not found, trying direct SQL..."
+  echo "DELETE FROM \"_prisma_migrations\" WHERE migration_name = '20250212000002_ensure_all_hr_fields';" | $PRISMA_CLI db execute --stdin 2>&1 || echo "⚠️  SQL execution failed"
+fi
 
 set -e
 
