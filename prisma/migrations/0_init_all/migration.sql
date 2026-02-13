@@ -1,5 +1,8 @@
--- Comprehensive migration to ensure all HR-related fields and tables exist
--- This migration is idempotent and can be run multiple times safely
+-- Single comprehensive migration for all database schema
+-- This migration uses IF NOT EXISTS to be idempotent and safe to run multiple times
+
+-- Note: This migration assumes the database already has the core tables from previous migrations
+-- It focuses on ensuring all HR-related fields and any missing columns exist
 
 -- Add missing columns to Employee table if they don't exist
 DO $$ 
@@ -100,7 +103,7 @@ BEGIN
     END IF;
 END $$;
 
--- Ensure AttendanceRecord table exists (in case it was missed)
+-- Create AttendanceRecord table if it doesn't exist
 CREATE TABLE IF NOT EXISTS "AttendanceRecord" (
     "id" TEXT NOT NULL,
     "orgId" TEXT NOT NULL,
@@ -124,7 +127,6 @@ CREATE INDEX IF NOT EXISTS "AttendanceRecord_employeeId_idx" ON "AttendanceRecor
 CREATE INDEX IF NOT EXISTS "AttendanceRecord_date_idx" ON "AttendanceRecord"("date");
 
 -- Create unique index for AttendanceRecord if it doesn't exist
--- Check in pg_indexes instead of pg_constraint since unique indexes are stored differently
 DO $$ 
 BEGIN
     IF NOT EXISTS (
