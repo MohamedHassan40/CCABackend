@@ -28,13 +28,9 @@ const p = new PrismaClient();
     const allRecords = await p.\$queryRaw\`SELECT migration_name, finished_at, rolled_back_at FROM \"_prisma_migrations\" ORDER BY started_at DESC LIMIT 10\`;
     console.log('Current migration records:', JSON.stringify(allRecords, null, 2));
     
-    // Delete the specific failed migration
-    const result1 = await p.\$executeRaw\`DELETE FROM \"_prisma_migrations\" WHERE migration_name = '20250212000002_ensure_all_hr_fields'\`;
-    console.log('Deleted specific failed migration:', result1, 'row(s)');
-    
     // Delete ALL failed migrations (finished_at IS NULL)
-    const result2 = await p.\$executeRaw\`DELETE FROM \"_prisma_migrations\" WHERE finished_at IS NULL\`;
-    console.log('Deleted other failed migrations:', result2, 'row(s)');
+    const result = await p.\$executeRaw\`DELETE FROM \"_prisma_migrations\" WHERE finished_at IS NULL\`;
+    console.log('Deleted failed migrations:', result, 'row(s)');
     
     // If table is empty or only has the failed one, we're good
     const finalCount = await p.\$queryRaw\`SELECT COUNT(*) as count FROM \"_prisma_migrations\"\`;
@@ -70,17 +66,14 @@ while [ $MIGRATE_ATTEMPTS -lt $MAX_ATTEMPTS ]; do
       echo "⚠️  Migration failed, attempting cleanup and retry ($MIGRATE_ATTEMPTS/$MAX_ATTEMPTS)..."
       set +e
       
-      # Try to resolve
-      $PRISMA_CLI migrate resolve --rolled-back "20250212000002_ensure_all_hr_fields" 2>&1 || {
-        # If resolve fails, try direct deletion
-        node -e "
-        const { PrismaClient } = require('@prisma/client');
-        const p = new PrismaClient();
-        p.\$executeRaw\`DELETE FROM \"_prisma_migrations\" WHERE migration_name = '20250212000002_ensure_all_hr_fields' OR finished_at IS NULL\`
-          .then(() => { console.log('✅ Cleaned up'); p.\$disconnect(); process.exit(0); })
-          .catch(e => { console.log('⚠️  Cleanup failed:', e.message); p.\$disconnect(); process.exit(0); });
-        " 2>&1
-      }
+      # If migration fails, try to delete all failed migrations
+      node -e "
+      const { PrismaClient } = require('@prisma/client');
+      const p = new PrismaClient();
+      p.\$executeRaw\`DELETE FROM \"_prisma_migrations\" WHERE finished_at IS NULL\`
+        .then(() => { console.log('✅ Cleaned up failed migrations'); p.\$disconnect(); process.exit(0); })
+        .catch(e => { console.log('⚠️  Cleanup failed:', e.message); p.\$disconnect(); process.exit(0); });
+      " 2>&1
       
       set -e
       sleep 2
