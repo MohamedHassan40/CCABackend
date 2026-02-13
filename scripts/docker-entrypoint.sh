@@ -10,21 +10,19 @@ echo "🔄 Running database migrations..."
 # Clean up any failed migration records before deploying
 echo "🔍 Cleaning up failed migrations..."
 set +e
-# Try to delete the old failed migration record if it exists
-node -e "
-const { PrismaClient } = require('@prisma/client');
-const prisma = new PrismaClient();
-(async () => {
-  try {
-    const result = await prisma.\$executeRaw\`DELETE FROM \"_prisma_migrations\" WHERE migration_name = '20250212000002_ensure_all_hr_fields' AND finished_at IS NULL\`;
-    console.log('✅ Cleaned up old failed migration:', result);
-  } catch (err) {
-    console.log('⚠️  Could not clean up migration (may not exist):', err.message);
-  } finally {
-    await prisma.\$disconnect();
+
+# Try to resolve/delete the failed migration using Prisma's resolve command
+echo "   Attempting to resolve failed migration..."
+$PRISMA_CLI migrate resolve --rolled-back "20250212000002_ensure_all_hr_fields" 2>&1 || {
+  echo "   Resolve command failed, trying to delete migration record directly..."
+  # Use Prisma's db execute to delete the failed migration record
+  echo "DELETE FROM \"_prisma_migrations\" WHERE migration_name = '20250212000002_ensure_all_hr_fields' AND finished_at IS NULL;" | $PRISMA_CLI db execute --stdin 2>&1 || {
+    echo "⚠️  Could not automatically clean up failed migration"
+    echo "💡 You may need to manually delete it from the database:"
+    echo "   DELETE FROM \"_prisma_migrations\" WHERE migration_name = '20250212000002_ensure_all_hr_fields';"
   }
-})();
-" 2>&1
+}
+
 set -e
 
 # Now try to deploy migrations
