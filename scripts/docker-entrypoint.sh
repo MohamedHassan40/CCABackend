@@ -14,10 +14,16 @@ set +e
 node -e "
 const { PrismaClient } = require('@prisma/client');
 const prisma = new PrismaClient();
-prisma.\$executeRaw\`DELETE FROM \"_prisma_migrations\" WHERE migration_name = '20250212000002_ensure_all_hr_fields'\`
-  .then(() => { console.log('✅ Cleaned up old failed migration'); process.exit(0); })
-  .catch(() => { console.log('⚠️  Old migration not found or already cleaned'); process.exit(0); })
-  .finally(() => prisma.\$disconnect());
+(async () => {
+  try {
+    const result = await prisma.\$executeRaw\`DELETE FROM \"_prisma_migrations\" WHERE migration_name = '20250212000002_ensure_all_hr_fields' AND finished_at IS NULL\`;
+    console.log('✅ Cleaned up old failed migration:', result);
+  } catch (err) {
+    console.log('⚠️  Could not clean up migration (may not exist):', err.message);
+  } finally {
+    await prisma.\$disconnect();
+  }
+})();
 " 2>&1
 set -e
 
