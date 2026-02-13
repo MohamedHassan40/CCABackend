@@ -37,23 +37,53 @@ const app = express();
 // Set to 1 to trust only the first proxy (Railway's reverse proxy)
 app.set('trust proxy', 1);
 
-// Security middleware (apply before other middleware)
+// CORS configuration - MUST be before other middleware to handle preflight requests
+// Handle multiple origins and preflight requests
+const corsOptions = {
+  origin: (origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) => {
+    // Allow requests with no origin (like mobile apps or curl requests)
+    if (!origin) {
+      callback(null, true);
+      return;
+    }
+
+    const allowedOrigins = Array.isArray(config.corsOrigin) 
+      ? config.corsOrigin 
+      : typeof config.corsOrigin === 'string'
+      ? config.corsOrigin.split(',').map(o => o.trim()).filter(Boolean)
+      : [config.corsOrigin];
+
+    // Check if origin is allowed
+    if (allowedOrigins.includes(origin) || allowedOrigins.includes('*')) {
+      callback(null, true);
+    } else {
+      console.warn(`CORS: Blocked origin: ${origin}. Allowed origins:`, allowedOrigins);
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-CSRF-Token'],
+  exposedHeaders: ['X-CSRF-Token'],
+  maxAge: 86400, // 24 hours
+};
+
+// Apply CORS FIRST (before other middleware)
+app.use(cors(corsOptions));
+
+// Security middleware (apply after CORS)
 if (config.nodeEnv === 'production') {
   app.use(helmetConfig);
 }
 app.use(securityHeaders);
 
-// CSRF protection (for state-changing requests)
+// CSRF protection (for state-changing requests) - after CORS
 if (config.nodeEnv === 'production') {
   app.use('/api', csrfProtection);
   app.use(setCsrfToken);
 }
 
 // Middleware
-app.use(cors({
-  origin: config.corsOrigin,
-  credentials: true,
-}));
 app.use(express.json());
 
 // Apply rate limiting to API routes
