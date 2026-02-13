@@ -7,25 +7,19 @@ PRISMA_CLI="node node_modules/prisma/build/index.js"
 
 echo "🔄 Running database migrations..."
 
-# First, try to fix any known failed migrations using our Node.js script
-# This directly updates the migration table to mark it as rolled back
-echo "🔍 Checking for failed migrations..."
+# Clean up any failed migration records before deploying
+echo "🔍 Cleaning up failed migrations..."
 set +e
-node scripts/fix-migration.js 2>&1
-FIX_EXIT_CODE=$?
+# Try to delete the old failed migration record if it exists
+node -e "
+const { PrismaClient } = require('@prisma/client');
+const prisma = new PrismaClient();
+prisma.\$executeRaw\`DELETE FROM \"_prisma_migrations\" WHERE migration_name = '20250212000002_ensure_all_hr_fields'\`
+  .then(() => { console.log('✅ Cleaned up old failed migration'); process.exit(0); })
+  .catch(() => { console.log('⚠️  Old migration not found or already cleaned'); process.exit(0); })
+  .finally(() => prisma.\$disconnect());
+" 2>&1
 set -e
-
-if [ "$FIX_EXIT_CODE" -eq 0 ]; then
-  echo "✅ Successfully fixed failed migration"
-elif [ "$FIX_EXIT_CODE" -eq 1 ]; then
-  echo "⚠️  Migration may already be resolved or not exist. Continuing..."
-else
-  # Fallback to Prisma's resolve command
-  echo "⚠️  Script fix failed, trying Prisma resolve command..."
-  set +e
-  $PRISMA_CLI migrate resolve --rolled-back "20250212000002_ensure_all_hr_fields" 2>&1
-  set -e
-fi
 
 # Now try to deploy migrations
 echo "🚀 Deploying migrations..."
