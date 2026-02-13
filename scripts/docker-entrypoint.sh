@@ -14,29 +14,44 @@ echo "Step 1: Generating Prisma Client..."
 $PRISMA_CLI generate 2>&1
 echo "✅ Prisma Client generated"
 
-# Step 2: Clean up failed migrations BEFORE attempting deploy
+# Step 2: FORCE RESOLVE the failed migration BEFORE anything else
 echo ""
-echo "Step 2: Cleaning up any failed migrations..."
+echo "Step 2: FORCE RESOLVING failed migration (Prisma official method)..."
 set +e
 
-# Delete all failed migrations from the database
-# This ensures we start clean
-node -e "
-const { PrismaClient } = require('@prisma/client');
-const p = new PrismaClient();
-(async () => {
-  try {
-    const result = await p.\$executeRaw\`DELETE FROM \"_prisma_migrations\" WHERE finished_at IS NULL\`;
-    console.log('Deleted', result, 'failed migration record(s)');
-    await p.\$disconnect();
-    process.exit(0);
-  } catch (e) {
-    console.log('Cleanup note:', e.message);
-    await p.\$disconnect().catch(() => {});
-    process.exit(0);
-  }
-})();
-" 2>&1
+# First, try Prisma's official migrate resolve command
+echo "Attempting: prisma migrate resolve --rolled-back 20250212000002_ensure_all_hr_fields"
+$PRISMA_CLI migrate resolve --rolled-back "20250212000002_ensure_all_hr_fields" 2>&1
+RESOLVE_EXIT=$?
+
+if [ "$RESOLVE_EXIT" -ne 0 ]; then
+  echo "⚠️  migrate resolve failed (exit code: $RESOLVE_EXIT)"
+  echo "Trying direct SQL deletion as fallback..."
+  
+  # Fallback: Direct SQL deletion using Node script
+  node -e "
+  const { PrismaClient } = require('@prisma/client');
+  const p = new PrismaClient();
+  (async () => {
+    try {
+      // Delete the specific failed migration
+      const result1 = await p.\$executeRaw\`DELETE FROM \"_prisma_migrations\" WHERE migration_name = '20250212000002_ensure_all_hr_fields'\`;
+      console.log('Deleted', result1, 'record(s) for 20250212000002_ensure_all_hr_fields');
+      
+      // Also delete any other failed migrations
+      const result2 = await p.\$executeRaw\`DELETE FROM \"_prisma_migrations\" WHERE finished_at IS NULL\`;
+      console.log('Deleted', result2, 'other failed migration record(s)');
+      
+      await p.\$disconnect();
+      process.exit(0);
+    } catch (e) {
+      console.log('SQL deletion error:', e.message);
+      await p.\$disconnect().catch(() => {});
+      process.exit(0);
+    }
+  })();
+  " 2>&1
+fi
 
 set -e
 
@@ -45,61 +60,26 @@ echo ""
 echo "Step 3: Deploying migrations..."
 if ! $PRISMA_CLI migrate deploy 2>&1; then
   echo ""
-  echo "❌ Migration deployment failed!"
+  echo "❌❌❌ Migration deployment FAILED! ❌❌❌"
   echo ""
-  echo "Attempting to resolve using Prisma's official method..."
-  set +e
-  
-  # Try to resolve any failed migrations using Prisma's official command
-  # Extract migration name from error or query database
-  node -e "
-  const { PrismaClient } = require('@prisma/client');
-  const p = new PrismaClient();
-  (async () => {
-    try {
-      const failed = await p.\$queryRaw\`SELECT migration_name FROM \"_prisma_migrations\" WHERE finished_at IS NULL\`;
-      if (failed && failed.length > 0) {
-        failed.forEach(m => console.log('MIGRATION:' + m.migration_name));
-      }
-      await p.\$disconnect();
-      process.exit(0);
-    } catch (e) {
-      await p.\$disconnect().catch(() => {});
-      process.exit(0);
-    }
-  })();
-  " 2>&1 | grep "^MIGRATION:" | sed 's/^MIGRATION://' | while read -r mig_name; do
-    if [ -n "$mig_name" ]; then
-      echo "Resolving failed migration: $mig_name"
-      $PRISMA_CLI migrate resolve --rolled-back "$mig_name" 2>&1 || echo "⚠️  Could not resolve $mig_name"
-    fi
-  done
-  
-  # Also try to delete any remaining failed migrations
-  node -e "
-  const { PrismaClient } = require('@prisma/client');
-  const p = new PrismaClient();
-  p.\$executeRaw\`DELETE FROM \"_prisma_migrations\" WHERE finished_at IS NULL\`
-    .then(() => { console.log('✅ Cleaned up remaining failed migrations'); p.\$disconnect(); process.exit(0); })
-    .catch(() => { p.\$disconnect(); process.exit(0); });
-  " 2>&1
-  
-  # Retry migration deploy
+  echo "The failed migration record still exists in your database."
   echo ""
-  echo "Retrying migration deployment..."
-  if ! $PRISMA_CLI migrate deploy 2>&1; then
-    echo "❌ Migration still failed after resolution attempts"
-    echo ""
-    echo "💡 Manual resolution required. The migration may need to be resolved manually:"
-    echo "   npx prisma migrate resolve --rolled-back <migration_name>"
-    echo "   or if partially applied:"
-    echo "   npx prisma migrate resolve --applied <migration_name>"
-    exit 1
-  fi
-  set -e
+  echo "YOU MUST MANUALLY RESOLVE THIS. Choose one option:"
+  echo ""
+  echo "Option 1 (Recommended - Prisma official method):"
+  echo "   npx prisma migrate resolve --rolled-back 20250212000002_ensure_all_hr_fields"
+  echo ""
+  echo "Option 2 (Direct SQL - if Option 1 doesn't work):"
+  echo "   Connect to your Railway database and run:"
+  echo "   DELETE FROM \"_prisma_migrations\" WHERE migration_name = '20250212000002_ensure_all_hr_fields';"
+  echo ""
+  echo "Option 3 (Nuclear option - delete ALL failed migrations):"
+  echo "   DELETE FROM \"_prisma_migrations\" WHERE finished_at IS NULL;"
+  echo ""
+  exit 1
 fi
 
-echo "✅ Migrations deployed successfully"
+echo "✅ Migrations deployed successfully!"
 
 # Step 4: Seed database
 echo ""
