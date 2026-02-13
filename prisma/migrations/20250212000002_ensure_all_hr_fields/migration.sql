@@ -123,12 +123,13 @@ CREATE INDEX IF NOT EXISTS "AttendanceRecord_orgId_idx" ON "AttendanceRecord"("o
 CREATE INDEX IF NOT EXISTS "AttendanceRecord_employeeId_idx" ON "AttendanceRecord"("employeeId");
 CREATE INDEX IF NOT EXISTS "AttendanceRecord_date_idx" ON "AttendanceRecord"("date");
 
--- Create unique constraint for AttendanceRecord if it doesn't exist
+-- Create unique index for AttendanceRecord if it doesn't exist
+-- Check in pg_indexes instead of pg_constraint since unique indexes are stored differently
 DO $$ 
 BEGIN
     IF NOT EXISTS (
-        SELECT 1 FROM pg_constraint 
-        WHERE conname = 'AttendanceRecord_employeeId_date_key'
+        SELECT 1 FROM pg_indexes 
+        WHERE indexname = 'AttendanceRecord_employeeId_date_key'
     ) THEN
         CREATE UNIQUE INDEX "AttendanceRecord_employeeId_date_key" ON "AttendanceRecord"("employeeId", "date");
     END IF;
