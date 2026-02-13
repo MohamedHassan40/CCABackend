@@ -7,18 +7,19 @@ PRISMA_CLI="node node_modules/prisma/build/index.js"
 
 echo "🔄 Running database migrations..."
 
-# Clean up any failed migration records before deploying
+# AGGRESSIVE CLEANUP: Delete failed migration records directly using raw SQL
 echo "🔍 Cleaning up failed migrations..."
 set +e
 
-# Try to resolve/delete the failed migration using Prisma's resolve command
-echo "   Attempting to resolve failed migration..."
-$PRISMA_CLI migrate resolve --rolled-back "20250212000002_ensure_all_hr_fields" 2>&1 || {
-  echo "   Resolve command failed, trying to delete migration record directly..."
-  # Use Prisma's db execute to delete the failed migration record
-  echo "DELETE FROM \"_prisma_migrations\" WHERE migration_name = '20250212000002_ensure_all_hr_fields' AND finished_at IS NULL;" | $PRISMA_CLI db execute --stdin 2>&1 || {
-    echo "⚠️  Could not automatically clean up failed migration"
-    echo "💡 You may need to manually delete it from the database:"
+# Use Prisma's db execute to directly delete the failed migration record
+echo "   Deleting failed migration record from database..."
+echo "DELETE FROM \"_prisma_migrations\" WHERE migration_name = '20250212000002_ensure_all_hr_fields';" | $PRISMA_CLI db execute --stdin 2>&1 && {
+  echo "✅ Successfully deleted failed migration record"
+} || {
+  echo "⚠️  Could not delete via db execute, trying resolve command..."
+  $PRISMA_CLI migrate resolve --rolled-back "20250212000002_ensure_all_hr_fields" 2>&1 || {
+    echo "⚠️  Both methods failed. The migration record may not exist or database connection issue."
+    echo "💡 If migrations still fail, manually run this SQL on your database:"
     echo "   DELETE FROM \"_prisma_migrations\" WHERE migration_name = '20250212000002_ensure_all_hr_fields';"
   }
 }
