@@ -14,33 +14,24 @@ echo "Step 1: Generating Prisma Client..."
 $PRISMA_CLI generate 2>&1
 echo "✅ Prisma Client generated"
 
-# Step 2: NUCLEAR OPTION - Clear ALL migration records if table is empty or has issues
+# Step 2: Clean up failed migrations BEFORE attempting deploy
 echo ""
-echo "Step 2: Checking and cleaning migration records..."
+echo "Step 2: Cleaning up any failed migrations..."
 set +e
 
+# Delete all failed migrations from the database
+# This ensures we start clean
 node -e "
 const { PrismaClient } = require('@prisma/client');
 const p = new PrismaClient();
 (async () => {
   try {
-    // Check current state
-    const allRecords = await p.\$queryRaw\`SELECT migration_name, finished_at, rolled_back_at FROM \"_prisma_migrations\" ORDER BY started_at DESC LIMIT 10\`;
-    console.log('Current migration records:', JSON.stringify(allRecords, null, 2));
-    
-    // Delete ALL failed migrations (finished_at IS NULL)
     const result = await p.\$executeRaw\`DELETE FROM \"_prisma_migrations\" WHERE finished_at IS NULL\`;
-    console.log('Deleted failed migrations:', result, 'row(s)');
-    
-    // If table is empty or only has the failed one, we're good
-    const finalCount = await p.\$queryRaw\`SELECT COUNT(*) as count FROM \"_prisma_migrations\"\`;
-    console.log('Remaining migration records:', finalCount[0].count);
-    
+    console.log('Deleted', result, 'failed migration record(s)');
     await p.\$disconnect();
     process.exit(0);
   } catch (e) {
-    console.log('⚠️  Cleanup check:', e.message);
-    // If table doesn't exist or has issues, that's actually fine - Prisma will create it
+    console.log('Cleanup note:', e.message);
     await p.\$disconnect().catch(() => {});
     process.exit(0);
   }
@@ -49,42 +40,66 @@ const p = new PrismaClient();
 
 set -e
 
-# Step 3: Deploy migrations with retry logic
+# Step 3: Deploy migrations
 echo ""
 echo "Step 3: Deploying migrations..."
-MIGRATE_ATTEMPTS=0
-MAX_ATTEMPTS=3
-
-while [ $MIGRATE_ATTEMPTS -lt $MAX_ATTEMPTS ]; do
-  if $PRISMA_CLI migrate deploy 2>&1; then
-    echo "✅ Migrations deployed successfully"
-    break
-  else
-    MIGRATE_ATTEMPTS=$((MIGRATE_ATTEMPTS + 1))
-    if [ $MIGRATE_ATTEMPTS -lt $MAX_ATTEMPTS ]; then
-      echo ""
-      echo "⚠️  Migration failed, attempting cleanup and retry ($MIGRATE_ATTEMPTS/$MAX_ATTEMPTS)..."
-      set +e
-      
-      # If migration fails, try to delete all failed migrations
-      node -e "
-      const { PrismaClient } = require('@prisma/client');
-      const p = new PrismaClient();
-      p.\$executeRaw\`DELETE FROM \"_prisma_migrations\" WHERE finished_at IS NULL\`
-        .then(() => { console.log('✅ Cleaned up failed migrations'); p.\$disconnect(); process.exit(0); })
-        .catch(e => { console.log('⚠️  Cleanup failed:', e.message); p.\$disconnect(); process.exit(0); });
-      " 2>&1
-      
-      set -e
-      sleep 2
-    else
-      echo ""
-      echo "❌ Migration failed after $MAX_ATTEMPTS attempts"
-      echo "💡 The _prisma_migrations table may need to be manually cleared"
-      exit 1
+if ! $PRISMA_CLI migrate deploy 2>&1; then
+  echo ""
+  echo "❌ Migration deployment failed!"
+  echo ""
+  echo "Attempting to resolve using Prisma's official method..."
+  set +e
+  
+  # Try to resolve any failed migrations using Prisma's official command
+  # Extract migration name from error or query database
+  node -e "
+  const { PrismaClient } = require('@prisma/client');
+  const p = new PrismaClient();
+  (async () => {
+    try {
+      const failed = await p.\$queryRaw\`SELECT migration_name FROM \"_prisma_migrations\" WHERE finished_at IS NULL\`;
+      if (failed && failed.length > 0) {
+        failed.forEach(m => console.log('MIGRATION:' + m.migration_name));
+      }
+      await p.\$disconnect();
+      process.exit(0);
+    } catch (e) {
+      await p.\$disconnect().catch(() => {});
+      process.exit(0);
+    }
+  })();
+  " 2>&1 | grep "^MIGRATION:" | sed 's/^MIGRATION://' | while read -r mig_name; do
+    if [ -n "$mig_name" ]; then
+      echo "Resolving failed migration: $mig_name"
+      $PRISMA_CLI migrate resolve --rolled-back "$mig_name" 2>&1 || echo "⚠️  Could not resolve $mig_name"
     fi
+  done
+  
+  # Also try to delete any remaining failed migrations
+  node -e "
+  const { PrismaClient } = require('@prisma/client');
+  const p = new PrismaClient();
+  p.\$executeRaw\`DELETE FROM \"_prisma_migrations\" WHERE finished_at IS NULL\`
+    .then(() => { console.log('✅ Cleaned up remaining failed migrations'); p.\$disconnect(); process.exit(0); })
+    .catch(() => { p.\$disconnect(); process.exit(0); });
+  " 2>&1
+  
+  # Retry migration deploy
+  echo ""
+  echo "Retrying migration deployment..."
+  if ! $PRISMA_CLI migrate deploy 2>&1; then
+    echo "❌ Migration still failed after resolution attempts"
+    echo ""
+    echo "💡 Manual resolution required. The migration may need to be resolved manually:"
+    echo "   npx prisma migrate resolve --rolled-back <migration_name>"
+    echo "   or if partially applied:"
+    echo "   npx prisma migrate resolve --applied <migration_name>"
+    exit 1
   fi
-done
+  set -e
+fi
+
+echo "✅ Migrations deployed successfully"
 
 # Step 4: Seed database
 echo ""
