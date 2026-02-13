@@ -9,49 +9,61 @@ echo "=========================================="
 echo "🔄 Starting database migration process"
 echo "=========================================="
 
+# Step 0: FORCE DELETE failed migrations BEFORE anything else
+# This uses Prisma's db execute which works without Prisma Client
+echo ""
+echo "Step 0: FORCE DELETING failed migrations (direct SQL execution)..."
+set +e
+
+# Delete the specific failed migration using Prisma's db execute
+echo "Deleting failed migration: 20250212000002_ensure_all_hr_fields"
+echo "DELETE FROM \"_prisma_migrations\" WHERE migration_name = '20250212000002_ensure_all_hr_fields';" | $PRISMA_CLI db execute --stdin 2>&1 || {
+  echo "⚠️  db execute failed, trying alternative method..."
+}
+
+# Also delete any other failed migrations
+echo "Deleting all failed migrations (finished_at IS NULL)"
+echo "DELETE FROM \"_prisma_migrations\" WHERE finished_at IS NULL;" | $PRISMA_CLI db execute --stdin 2>&1 || {
+  echo "⚠️  db execute failed for cleanup..."
+}
+
+# Try Prisma's official resolve method as well
+echo "Attempting Prisma migrate resolve..."
+$PRISMA_CLI migrate resolve --rolled-back "20250212000002_ensure_all_hr_fields" 2>&1 || {
+  echo "⚠️  migrate resolve failed (this is OK if migration doesn't exist)"
+}
+
+set -e
+
 # Step 1: Generate Prisma Client
+echo ""
 echo "Step 1: Generating Prisma Client..."
 $PRISMA_CLI generate 2>&1
 echo "✅ Prisma Client generated"
 
-# Step 2: FORCE RESOLVE the failed migration BEFORE anything else
+# Step 2: Final cleanup using Prisma Client (if previous steps didn't work)
 echo ""
-echo "Step 2: FORCE RESOLVING failed migration (Prisma official method)..."
+echo "Step 2: Final cleanup attempt using Prisma Client..."
 set +e
 
-# First, try Prisma's official migrate resolve command
-echo "Attempting: prisma migrate resolve --rolled-back 20250212000002_ensure_all_hr_fields"
-$PRISMA_CLI migrate resolve --rolled-back "20250212000002_ensure_all_hr_fields" 2>&1
-RESOLVE_EXIT=$?
-
-if [ "$RESOLVE_EXIT" -ne 0 ]; then
-  echo "⚠️  migrate resolve failed (exit code: $RESOLVE_EXIT)"
-  echo "Trying direct SQL deletion as fallback..."
-  
-  # Fallback: Direct SQL deletion using Node script
-  node -e "
-  const { PrismaClient } = require('@prisma/client');
-  const p = new PrismaClient();
-  (async () => {
-    try {
-      // Delete the specific failed migration
-      const result1 = await p.\$executeRaw\`DELETE FROM \"_prisma_migrations\" WHERE migration_name = '20250212000002_ensure_all_hr_fields'\`;
-      console.log('Deleted', result1, 'record(s) for 20250212000002_ensure_all_hr_fields');
-      
-      // Also delete any other failed migrations
-      const result2 = await p.\$executeRaw\`DELETE FROM \"_prisma_migrations\" WHERE finished_at IS NULL\`;
-      console.log('Deleted', result2, 'other failed migration record(s)');
-      
-      await p.\$disconnect();
-      process.exit(0);
-    } catch (e) {
-      console.log('SQL deletion error:', e.message);
-      await p.\$disconnect().catch(() => {});
-      process.exit(0);
-    }
-  })();
-  " 2>&1
-fi
+node -e "
+const { PrismaClient } = require('@prisma/client');
+const p = new PrismaClient();
+(async () => {
+  try {
+    const result1 = await p.\$executeRaw\`DELETE FROM \"_prisma_migrations\" WHERE migration_name = '20250212000002_ensure_all_hr_fields'\`;
+    console.log('Deleted', result1, 'record(s) for 20250212000002_ensure_all_hr_fields');
+    const result2 = await p.\$executeRaw\`DELETE FROM \"_prisma_migrations\" WHERE finished_at IS NULL\`;
+    console.log('Deleted', result2, 'other failed migration record(s)');
+    await p.\$disconnect();
+    process.exit(0);
+  } catch (e) {
+    console.log('Final cleanup note:', e.message);
+    await p.\$disconnect().catch(() => {});
+    process.exit(0);
+  }
+})();
+" 2>&1
 
 set -e
 
@@ -62,18 +74,14 @@ if ! $PRISMA_CLI migrate deploy 2>&1; then
   echo ""
   echo "❌❌❌ Migration deployment FAILED! ❌❌❌"
   echo ""
-  echo "The failed migration record still exists in your database."
+  echo "The failed migration record still exists in your Railway database."
   echo ""
-  echo "YOU MUST MANUALLY RESOLVE THIS. Choose one option:"
+  echo "YOU MUST MANUALLY DELETE IT. Connect to your Railway PostgreSQL database and run:"
   echo ""
-  echo "Option 1 (Recommended - Prisma official method):"
-  echo "   npx prisma migrate resolve --rolled-back 20250212000002_ensure_all_hr_fields"
-  echo ""
-  echo "Option 2 (Direct SQL - if Option 1 doesn't work):"
-  echo "   Connect to your Railway database and run:"
   echo "   DELETE FROM \"_prisma_migrations\" WHERE migration_name = '20250212000002_ensure_all_hr_fields';"
   echo ""
-  echo "Option 3 (Nuclear option - delete ALL failed migrations):"
+  echo "Or delete all failed migrations:"
+  echo ""
   echo "   DELETE FROM \"_prisma_migrations\" WHERE finished_at IS NULL;"
   echo ""
   exit 1
