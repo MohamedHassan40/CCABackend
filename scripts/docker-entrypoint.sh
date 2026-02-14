@@ -33,7 +33,7 @@ client.connect()
       return Promise.all(result.rows.map(row => {
         const { execSync } = require('child_process');
         try {
-          execSync(\`node node_modules/prisma/build/index.js migrate resolve --rolled-back \"\${row.migration_name}\"\`, { stdio: 'inherit' });
+          execSync(\`node node_modules/prisma/build/index.js migrate resolve --rolled-back \"\${row.migration_name}\"\`, { stdio: 'inherit', cwd: '/app' });
           console.log('Resolved:', row.migration_name);
         } catch (e) {
           console.log('Could not resolve:', row.migration_name);
