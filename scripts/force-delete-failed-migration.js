@@ -7,6 +7,12 @@
 const { Client } = require('pg');
 
 async function forceDeleteFailedMigrations() {
+  if (!process.env.DATABASE_URL) {
+    console.error('❌ DATABASE_URL environment variable not set');
+    process.exit(0);
+  }
+
+  console.log('Connecting to database...');
   const client = new Client({
     connectionString: process.env.DATABASE_URL,
   });
@@ -14,6 +20,12 @@ async function forceDeleteFailedMigrations() {
   try {
     await client.connect();
     console.log('✅ Connected to database');
+
+    // First, check what failed migrations exist
+    const checkResult = await client.query(
+      `SELECT migration_name, started_at, finished_at FROM "_prisma_migrations" WHERE finished_at IS NULL`
+    );
+    console.log(`Found ${checkResult.rows.length} failed migration(s):`, checkResult.rows.map(r => r.migration_name));
 
     // Delete the specific failed migration
     const result1 = await client.query(
@@ -43,6 +55,7 @@ async function forceDeleteFailedMigrations() {
     process.exit(0);
   } catch (error) {
     console.error('❌ Error deleting failed migrations:', error.message);
+    console.error('Stack:', error.stack);
     try {
       await client.end();
     } catch (e) {
