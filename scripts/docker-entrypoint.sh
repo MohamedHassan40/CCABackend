@@ -1,4 +1,8 @@
 #!/bin/sh
+# THIS SCRIPT USES DB PUSH - NOT MIGRATE DEPLOY
+# If you see "Running database migrations..." that means Railway is using a cached image
+# Force rebuild on Railway without cache!
+
 set -e
 cd /app
 
@@ -6,8 +10,9 @@ cd /app
 PRISMA_CLI="node node_modules/prisma/build/index.js"
 
 echo "=========================================="
-echo "🔄 Starting database setup process"
-echo "🔄 USING DB PUSH (NO MIGRATIONS)"
+echo "🔄 STARTING DATABASE SETUP PROCESS"
+echo "🔄 THIS SCRIPT USES DB PUSH - NOT MIGRATE DEPLOY"
+echo "🔄 IF YOU SEE 'Running database migrations...' RAILWAY IS USING CACHED IMAGE"
 echo "=========================================="
 
 # Step 0: Delete failed migration records from database
@@ -36,6 +41,7 @@ echo "✅ Prisma Client generated"
 echo ""
 echo "Step 2: Pushing database schema (using db push - NO MIGRATIONS)..."
 echo "This command bypasses the migration system entirely"
+echo "Command: prisma db push --accept-data-loss --skip-generate"
 $PRISMA_CLI db push --accept-data-loss --skip-generate 2>&1 && {
   echo "✅ Database schema pushed successfully!"
 } || {
