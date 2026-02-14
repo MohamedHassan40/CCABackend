@@ -43,8 +43,9 @@ RUN npm install prisma --save
 # Create uploads directory
 RUN mkdir -p /app/uploads
 
-# Make entrypoint executable
+# Make entrypoint and pre-start scripts executable
 RUN chmod +x /app/scripts/docker-entrypoint.sh
+RUN chmod +x /app/scripts/pre-start.sh || true
 
 # Create non-root user
 RUN addgroup -g 1001 -S nodejs && \
