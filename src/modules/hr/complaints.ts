@@ -325,3 +325,6 @@ router.delete('/:id', requirePermission('hr.complaints.delete'), async (req: Req
 export default router;
 
 
+
+
+

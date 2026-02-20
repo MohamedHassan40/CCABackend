@@ -152,6 +152,8 @@ router.get('/', authMiddleware, async (req: Request, res: Response) => {
       };
     });
 
+    const isOrgAdmin = roles.some((r) => r.key === 'owner' || r.key === 'admin');
+
     const response: MeResponse = {
       user: {
         id: user.id,
@@ -182,6 +184,7 @@ router.get('/', authMiddleware, async (req: Request, res: Response) => {
           : false,
       },
       roles,
+      isOrgAdmin,
       permissions: uniquePermissions,
       enabledModules,
     };

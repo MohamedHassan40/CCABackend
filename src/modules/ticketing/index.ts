@@ -19,6 +19,11 @@ export const ticketingManifest: ModuleManifest = {
       label: 'Tickets',
       permission: 'ticketing.tickets.view',
     },
+    {
+      path: '/ticketing/categories',
+      label: 'Categories',
+      permission: 'ticketing.tickets.view',
+    },
   ],
   dashboardWidgets: [
     {
@@ -458,7 +463,7 @@ router.delete('/tickets/:id/comments/:commentId', requirePermission('ticketing.t
   }
 });
 
-// GET /api/ticketing/categories - Get ticket categories
+// GET /api/ticketing/categories - Get ticket categories (optional includeInactive for management)
 router.get('/categories', requirePermission('ticketing.tickets.view'), async (req, res) => {
   try {
     if (!req.org) {
@@ -466,11 +471,19 @@ router.get('/categories', requirePermission('ticketing.tickets.view'), async (re
       return;
     }
 
+    const includeInactive = req.query.includeInactive === 'true';
+    const where: { orgId: string; isActive?: boolean } = {
+      orgId: req.org.id,
+    };
+    if (!includeInactive) {
+      where.isActive = true;
+    }
+
     const categories = await prisma.ticketCategory.findMany({
-      where: {
-        orgId: req.org.id,
-        isActive: true,
-      },
+      where,
+      include: includeInactive
+        ? { _count: { select: { tickets: true } } }
+        : undefined,
       orderBy: {
         name: 'asc',
       },

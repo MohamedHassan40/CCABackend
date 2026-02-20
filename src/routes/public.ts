@@ -454,6 +454,189 @@ router.post('/store/:orgSlug/orders', async (req: Request, res: Response) => {
   }
 });
 
+// ============================================
+// PUBLIC TICKETING ENDPOINTS
+// ============================================
+
+// GET /api/public/tickets/:orgSlug/categories - Get active ticket categories for public form
+router.get('/tickets/:orgSlug/categories', async (req: Request, res: Response) => {
+  try {
+    const { orgSlug } = req.params;
+    const org = await prisma.organization.findUnique({
+      where: { slug: orgSlug, isActive: true },
+      select: { id: true },
+    });
+    if (!org) {
+      res.status(404).json({ error: 'Organization not found' });
+      return;
+    }
+    const ticketingModule = await prisma.module.findUnique({ where: { key: 'ticketing' } });
+    if (!ticketingModule) {
+      res.status(404).json({ error: 'Ticketing not available' });
+      return;
+    }
+    const orgModule = await prisma.orgModule.findUnique({
+      where: {
+        organizationId_moduleId: { organizationId: org.id, moduleId: ticketingModule.id },
+      },
+    });
+    if (!orgModule?.isEnabled) {
+      res.status(404).json({ error: 'Ticketing is not enabled for this organization' });
+      return;
+    }
+    const categories = await prisma.ticketCategory.findMany({
+      where: { orgId: org.id, isActive: true },
+      orderBy: { name: 'asc' },
+      select: { id: true, name: true, description: true, color: true },
+    });
+    res.json(categories);
+  } catch (error) {
+    console.error('Error fetching public ticket categories:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// POST /api/public/tickets/:orgSlug - Submit a ticket (public, no auth)
+router.post('/tickets/:orgSlug', async (req: Request, res: Response) => {
+  try {
+    const { orgSlug } = req.params;
+    const { title, description, priority, categoryId, submittedByEmail, submittedByName } = req.body;
+
+    if (!title || !submittedByEmail) {
+      res.status(400).json({ error: 'Title and email are required' });
+      return;
+    }
+
+    const org = await prisma.organization.findUnique({
+      where: { slug: orgSlug, isActive: true },
+      select: { id: true },
+    });
+    if (!org) {
+      res.status(404).json({ error: 'Organization not found' });
+      return;
+    }
+    const ticketingModule = await prisma.module.findUnique({ where: { key: 'ticketing' } });
+    if (!ticketingModule) {
+      res.status(404).json({ error: 'Ticketing not available' });
+      return;
+    }
+    const orgModule = await prisma.orgModule.findUnique({
+      where: {
+        organizationId_moduleId: { organizationId: org.id, moduleId: ticketingModule.id },
+      },
+    });
+    if (!orgModule?.isEnabled) {
+      res.status(404).json({ error: 'Ticketing is not enabled for this organization' });
+      return;
+    }
+
+    if (categoryId) {
+      const category = await prisma.ticketCategory.findFirst({
+        where: { id: categoryId, orgId: org.id, isActive: true },
+      });
+      if (!category) {
+        res.status(400).json({ error: 'Invalid category' });
+        return;
+      }
+    }
+
+    const ticket = await prisma.ticket.create({
+      data: {
+        orgId: org.id,
+        title,
+        description: description || null,
+        priority: priority || 'medium',
+        status: 'open',
+        createdById: null,
+        assigneeId: null,
+        categoryId: categoryId || null,
+        submittedByEmail: submittedByEmail.trim(),
+        submittedByName: submittedByName ? String(submittedByName).trim() : null,
+      },
+      select: {
+        id: true,
+        title: true,
+        status: true,
+        createdAt: true,
+        submittedByEmail: true,
+      },
+    });
+
+    res.status(201).json({
+      ...ticket,
+      message: 'Ticket submitted successfully. You can track it using your email and the ticket ID.',
+    });
+  } catch (error) {
+    console.error('Error creating public ticket:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// GET /api/public/tickets/:orgSlug/track?ticketId=xxx&email=xxx - Track ticket (public)
+router.get('/tickets/:orgSlug/track', async (req: Request, res: Response) => {
+  try {
+    const { orgSlug } = req.params;
+    const { ticketId, email } = req.query;
+
+    if (!ticketId || !email) {
+      res.status(400).json({ error: 'ticketId and email are required' });
+      return;
+    }
+
+    const org = await prisma.organization.findUnique({
+      where: { slug: orgSlug, isActive: true },
+      select: { id: true, name: true },
+    });
+    if (!org) {
+      res.status(404).json({ error: 'Organization not found' });
+      return;
+    }
+
+    const ticket = await prisma.ticket.findFirst({
+      where: {
+        id: String(ticketId),
+        orgId: org.id,
+      },
+      select: {
+        id: true,
+        title: true,
+        status: true,
+        priority: true,
+        createdAt: true,
+        updatedAt: true,
+        submittedByEmail: true,
+        createdBy: { select: { email: true } },
+      },
+    });
+
+    if (!ticket) {
+      res.status(404).json({ error: 'Ticket not found' });
+      return;
+    }
+
+    const emailMatch =
+      (ticket.submittedByEmail && ticket.submittedByEmail.toLowerCase() === String(email).toLowerCase()) ||
+      (ticket.createdBy?.email && ticket.createdBy.email.toLowerCase() === String(email).toLowerCase());
+
+    if (!emailMatch) {
+      res.status(403).json({ error: 'Email does not match this ticket' });
+      return;
+    }
+
+    res.json({
+      id: ticket.id,
+      title: ticket.title,
+      status: ticket.status,
+      priority: ticket.priority,
+      createdAt: ticket.createdAt,
+      updatedAt: ticket.updatedAt,
+    });
+  } catch (error) {
+    console.error('Error tracking public ticket:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 export default router;
 
 

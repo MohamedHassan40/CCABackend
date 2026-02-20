@@ -271,3 +271,6 @@ router.delete('/:id', requirePermission('hr.announcements.delete'), async (req: 
 export default router;
 
 
+
+
+

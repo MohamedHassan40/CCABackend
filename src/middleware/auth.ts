@@ -92,12 +92,7 @@ export async function authMiddleware(
 
     next();
   } catch (error) {
-    console.error('Auth middleware error:', error);
-    if (error instanceof Error && error.message.includes('jwt')) {
-      res.status(401).json({ error: 'Invalid token' });
-    } else {
-      res.status(500).json({ error: 'Internal server error' });
-    }
+    res.status(401).json({ error: 'Invalid token' });
   }
 }
 

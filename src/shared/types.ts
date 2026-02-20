@@ -78,6 +78,8 @@ export type MeResponse = {
     key: string;
     name: string;
   }>;
+  /** True if the user has org-level owner or admin role in the current organization */
+  isOrgAdmin?: boolean;
   permissions: Array<{
     id: string;
     key: string;

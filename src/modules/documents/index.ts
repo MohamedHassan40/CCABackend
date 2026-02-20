@@ -76,11 +76,22 @@ router.get('/', requirePermission('documents.view'), async (req: Request, res: R
       return;
     }
 
-    const { folderId, status, search, categoryId, tags } = req.query;
+    const { folderId, status, search, categoryId, tags, sharedWithMe } = req.query;
 
     const where: any = {
       orgId: req.org.id,
     };
+
+    if (sharedWithMe === 'true' && req.user?.id) {
+      where.shares = {
+        some: {
+          OR: [
+            { sharedWithId: req.user.id },
+            { sharedWithEmail: req.user.email },
+          ],
+        },
+      };
+    }
 
     if (folderId) {
       where.folderId = folderId as string;

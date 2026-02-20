@@ -17,6 +17,7 @@ import { registerHrModule } from './modules/hr';
 import { registerTicketingModule } from './modules/ticketing';
 import { registerBillingModule } from './modules/billing';
 import { registerMarketplaceModule } from './modules/marketplace';
+import { registerInventoryModule } from './modules/inventory';
 import { registerPmoModule } from './modules/pmo';
 import { registerDocumentsModule } from './modules/documents';
 import { registerSalesModule } from './modules/sales';
@@ -33,57 +34,23 @@ initErrorTracking();
 
 const app = express();
 
-// Trust proxy - required for rate limiting behind reverse proxy (Railway, etc.)
-// Set to 1 to trust only the first proxy (Railway's reverse proxy)
-app.set('trust proxy', 1);
-
-// CORS configuration - MUST be before other middleware to handle preflight requests
-// Handle multiple origins and preflight requests
-const corsOptions = {
-  origin: (origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) => {
-    // Allow requests with no origin (like mobile apps or curl requests)
-    if (!origin) {
-      callback(null, true);
-      return;
-    }
-
-    const allowedOrigins = Array.isArray(config.corsOrigin) 
-      ? config.corsOrigin 
-      : typeof config.corsOrigin === 'string'
-      ? config.corsOrigin.split(',').map(o => o.trim()).filter(Boolean)
-      : [config.corsOrigin];
-
-    // Check if origin is allowed
-    if (allowedOrigins.includes(origin) || allowedOrigins.includes('*')) {
-      callback(null, true);
-    } else {
-      console.warn(`CORS: Blocked origin: ${origin}. Allowed origins:`, allowedOrigins);
-      callback(new Error('Not allowed by CORS'));
-    }
-  },
-  credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-CSRF-Token'],
-  exposedHeaders: ['X-CSRF-Token'],
-  maxAge: 86400, // 24 hours
-};
-
-// Apply CORS FIRST (before other middleware)
-app.use(cors(corsOptions));
-
-// Security middleware (apply after CORS)
+// Security middleware (apply before other middleware)
 if (config.nodeEnv === 'production') {
   app.use(helmetConfig);
 }
 app.use(securityHeaders);
 
-// CSRF protection (for state-changing requests) - after CORS
+// CSRF protection (for state-changing requests)
 if (config.nodeEnv === 'production') {
   app.use('/api', csrfProtection);
   app.use(setCsrfToken);
 }
 
 // Middleware
+app.use(cors({
+  origin: config.corsOrigin,
+  credentials: true,
+}));
 app.use(express.json());
 
 // Apply rate limiting to API routes
@@ -145,6 +112,7 @@ registerHrModule(mainRouter);
 registerTicketingModule(mainRouter);
 registerBillingModule(mainRouter);
 registerMarketplaceModule(mainRouter);
+registerInventoryModule(mainRouter);
 registerPmoModule(mainRouter);
 registerDocumentsModule(mainRouter);
 registerSalesModule(mainRouter);

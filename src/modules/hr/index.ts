@@ -16,10 +16,6 @@ import performanceRouter from './performance';
 import tasksRouter from './tasks';
 import calendarRouter from './calendar';
 import decisionsRouter from './decisions';
-import complaintsRouter from './complaints';
-import requestsRouter from './requests';
-import announcementsRouter from './announcements';
-import assetsRouter, { assignmentsRouter, returnsRouter, damagesRouter, swapsRouter } from './assets';
 
 const router = Router();
 
@@ -74,46 +70,6 @@ export const hrManifest: ModuleManifest = {
       label: 'Decisions',
       permission: 'hr.decisions.view',
     },
-    {
-      path: '/hr/complaints',
-      label: 'Complaints',
-      permission: 'hr.complaints.view',
-    },
-    {
-      path: '/hr/requests',
-      label: 'Requests',
-      permission: 'hr.requests.view',
-    },
-    {
-      path: '/hr/announcements',
-      label: 'Announcements',
-      permission: 'hr.announcements.view',
-    },
-    {
-      path: '/hr/assets',
-      label: 'Employee Assets',
-      permission: 'hr.assets.view',
-    },
-    {
-      path: '/hr/assets/assignments',
-      label: 'Asset Assignments',
-      permission: 'hr.assets.assignments.view',
-    },
-    {
-      path: '/hr/assets/returns',
-      label: 'Asset Returns',
-      permission: 'hr.assets.returns.view',
-    },
-    {
-      path: '/hr/assets/damages',
-      label: 'Asset Damages',
-      permission: 'hr.assets.damages.view',
-    },
-    {
-      path: '/hr/assets/swaps',
-      label: 'Asset Swaps',
-      permission: 'hr.assets.swaps.view',
-    },
   ],
   dashboardWidgets: [
     {
@@ -140,14 +96,6 @@ export function registerHrModule(routerInstance: Router): void {
   routerInstance.use('/api/hr/tasks', authMiddleware, requireModuleEnabled('hr'), tasksRouter);
   routerInstance.use('/api/hr/calendar', authMiddleware, requireModuleEnabled('hr'), calendarRouter);
   routerInstance.use('/api/hr/decisions', authMiddleware, requireModuleEnabled('hr'), decisionsRouter);
-  routerInstance.use('/api/hr/complaints', authMiddleware, requireModuleEnabled('hr'), complaintsRouter);
-  routerInstance.use('/api/hr/requests', authMiddleware, requireModuleEnabled('hr'), requestsRouter);
-  routerInstance.use('/api/hr/announcements', authMiddleware, requireModuleEnabled('hr'), announcementsRouter);
-  routerInstance.use('/api/hr/assets', authMiddleware, requireModuleEnabled('hr'), assetsRouter);
-  routerInstance.use('/api/hr/assets/assignments', authMiddleware, requireModuleEnabled('hr'), assignmentsRouter);
-  routerInstance.use('/api/hr/assets/returns', authMiddleware, requireModuleEnabled('hr'), returnsRouter);
-  routerInstance.use('/api/hr/assets/damages', authMiddleware, requireModuleEnabled('hr'), damagesRouter);
-  routerInstance.use('/api/hr/assets/swaps', authMiddleware, requireModuleEnabled('hr'), swapsRouter);
 
   // Register in module registry
   moduleRegistry.register({
