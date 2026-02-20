@@ -24,6 +24,11 @@ export const ticketingManifest: ModuleManifest = {
       label: 'Categories',
       permission: 'ticketing.tickets.view',
     },
+    {
+      path: '/ticketing/reports',
+      label: 'Reports',
+      permission: 'ticketing.tickets.view',
+    },
   ],
   dashboardWidgets: [
     {
@@ -640,6 +645,84 @@ router.delete('/categories/:id', requirePermission('ticketing.tickets.delete'), 
     res.json({ message: 'Category deleted successfully' });
   } catch (error) {
     console.error('Error deleting ticket category:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// GET /api/ticketing/reports - Stats by status, category, assignee, priority
+router.get('/reports', requirePermission('ticketing.tickets.view'), async (req, res) => {
+  try {
+    if (!req.org) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+
+    const [byStatus, byPriority, byCategory, byAssignee, total, openCount] = await Promise.all([
+      prisma.ticket.groupBy({
+        by: ['status'],
+        where: { orgId: req.org.id },
+        _count: { id: true },
+        orderBy: { _count: { id: 'desc' } },
+      }),
+      prisma.ticket.groupBy({
+        by: ['priority'],
+        where: { orgId: req.org.id },
+        _count: { id: true },
+        orderBy: { _count: { id: 'desc' } },
+      }),
+      prisma.ticket.groupBy({
+        by: ['categoryId'],
+        where: { orgId: req.org.id },
+        _count: { id: true },
+      }),
+      prisma.ticket.groupBy({
+        by: ['assigneeId'],
+        where: { orgId: req.org.id },
+        _count: { id: true },
+      }),
+      prisma.ticket.count({ where: { orgId: req.org.id } }),
+      prisma.ticket.count({
+        where: { orgId: req.org.id, status: 'open' },
+      }),
+    ]);
+
+    const categoryIds = [...new Set(byCategory.map((c) => c.categoryId).filter(Boolean))] as string[];
+    const categories = categoryIds.length
+      ? await prisma.ticketCategory.findMany({
+          where: { id: { in: categoryIds }, orgId: req.org.id },
+          select: { id: true, name: true, color: true },
+        })
+      : [];
+    const categoryMap = Object.fromEntries(categories.map((c) => [c.id, c]));
+
+    const assigneeIds = [...new Set(byAssignee.map((a) => a.assigneeId).filter(Boolean))] as string[];
+    const users = assigneeIds.length
+      ? await prisma.user.findMany({
+          where: { id: { in: assigneeIds } },
+          select: { id: true, name: true, email: true },
+        })
+      : [];
+    const userMap = Object.fromEntries(users.map((u) => [u.id, u]));
+
+    res.json({
+      total,
+      openCount,
+      byStatus: byStatus.map((s) => ({ status: s.status, count: s._count.id })),
+      byPriority: byPriority.map((p) => ({ priority: p.priority, count: p._count.id })),
+      byCategory: byCategory.map((c) => ({
+        categoryId: c.categoryId,
+        categoryName: c.categoryId ? categoryMap[c.categoryId]?.name ?? 'Uncategorized' : 'Uncategorized',
+        color: c.categoryId ? categoryMap[c.categoryId]?.color ?? null : null,
+        count: c._count.id,
+      })),
+      byAssignee: byAssignee.map((a) => ({
+        assigneeId: a.assigneeId,
+        assigneeName: a.assigneeId ? userMap[a.assigneeId]?.name ?? userMap[a.assigneeId]?.email ?? 'Unknown' : 'Unassigned',
+        count: a._count.id,
+      })),
+    });
+  } catch (error) {
+    console.error('Error fetching ticketing reports:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 });

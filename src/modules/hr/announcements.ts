@@ -35,14 +35,8 @@ router.get('/', requirePermission('hr.announcements.view'), async (req: Request,
         },
       });
 
-      if (employee && employee.department) {
-        where.OR = [
-          { targetAudience: 'all' },
-          { targetAudience: 'department', department: employee.department },
-        ];
-      } else {
-        where.targetAudience = 'all';
-      }
+      // Schema has targetAudience: "all" | "specific_type" (no department). Show all published to org.
+      where.targetAudience = 'all';
     } else if (isPublished !== undefined) {
       where.isPublished = isPublished === 'true';
     }
@@ -203,7 +197,7 @@ router.put('/:id', requirePermission('hr.announcements.edit'), async (req: Reque
     if (priority !== undefined) updateData.priority = priority;
     if (targetAudience !== undefined) {
       updateData.targetAudience = targetAudience;
-      updateData.department = targetAudience === 'department' ? department || null : null;
+      // Schema uses specificMembershipTypeId for "specific_type", not department
     }
     if (isPublished !== undefined) {
       updateData.isPublished = isPublished;

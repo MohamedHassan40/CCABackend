@@ -16,6 +16,10 @@ import performanceRouter from './performance';
 import tasksRouter from './tasks';
 import calendarRouter from './calendar';
 import decisionsRouter from './decisions';
+import announcementsRouter from './announcements';
+import complaintsRouter from './complaints';
+import requestsRouter from './requests';
+import assetsRouter from './assets';
 
 const router = Router();
 
@@ -96,6 +100,10 @@ export function registerHrModule(routerInstance: Router): void {
   routerInstance.use('/api/hr/tasks', authMiddleware, requireModuleEnabled('hr'), tasksRouter);
   routerInstance.use('/api/hr/calendar', authMiddleware, requireModuleEnabled('hr'), calendarRouter);
   routerInstance.use('/api/hr/decisions', authMiddleware, requireModuleEnabled('hr'), decisionsRouter);
+  routerInstance.use('/api/hr/announcements', authMiddleware, requireModuleEnabled('hr'), announcementsRouter);
+  routerInstance.use('/api/hr/complaints', authMiddleware, requireModuleEnabled('hr'), complaintsRouter);
+  routerInstance.use('/api/hr/requests', authMiddleware, requireModuleEnabled('hr'), requestsRouter);
+  routerInstance.use('/api/hr/assets', authMiddleware, requireModuleEnabled('hr'), assetsRouter);
 
   // Register in module registry
   moduleRegistry.register({

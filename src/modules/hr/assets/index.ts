@@ -8,6 +8,12 @@ import swapsRouter from './swaps';
 
 const router = Router();
 
+// Mount sub-routers first (before /:id to avoid capturing path segments)
+router.use('/assignments', assignmentsRouter);
+router.use('/returns', returnsRouter);
+router.use('/damages', damagesRouter);
+router.use('/swaps', swapsRouter);
+
 // ============================================
 // EMPLOYEE ASSETS
 // ============================================
