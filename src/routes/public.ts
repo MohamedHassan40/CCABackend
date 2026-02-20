@@ -552,14 +552,14 @@ router.post('/tickets/:orgSlug', async (req: Request, res: Response) => {
         categoryId: categoryId || null,
         submittedByEmail: submittedByEmail.trim(),
         submittedByName: submittedByName ? String(submittedByName).trim() : null,
-      },
+      } as any,
       select: {
         id: true,
         title: true,
         status: true,
         createdAt: true,
         submittedByEmail: true,
-      },
+      } as any,
     });
 
     res.status(201).json({
@@ -592,7 +592,17 @@ router.get('/tickets/:orgSlug/track', async (req: Request, res: Response) => {
       return;
     }
 
-    const ticket = await prisma.ticket.findFirst({
+    type TrackTicketResult = {
+      id: string;
+      title: string;
+      status: string;
+      priority: string;
+      createdAt: Date;
+      updatedAt: Date;
+      submittedByEmail?: string | null;
+      createdBy?: { email: string } | null;
+    };
+    const raw = await prisma.ticket.findFirst({
       where: {
         id: String(ticketId),
         orgId: org.id,
@@ -606,8 +616,9 @@ router.get('/tickets/:orgSlug/track', async (req: Request, res: Response) => {
         updatedAt: true,
         submittedByEmail: true,
         createdBy: { select: { email: true } },
-      },
+      } as any,
     });
+    const ticket = raw as TrackTicketResult | null;
 
     if (!ticket) {
       res.status(404).json({ error: 'Ticket not found' });

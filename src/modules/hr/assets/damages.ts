@@ -23,17 +23,17 @@ router.get('/', requirePermission('hr.assets.damages.view'), async (req, res) =>
     }
 
     if (assetId) {
-      where.assetId = assetId as string;
+      where.itemId = assetId as string;
     }
 
     if (employeeId) {
       where.employeeId = employeeId as string;
     }
 
-    const damages = await prisma.assetDamage.findMany({
+    const damages = await prisma.inventoryDamage.findMany({
       where,
       include: {
-        asset: {
+        item: {
           select: {
             id: true,
             name: true,
@@ -94,13 +94,13 @@ router.get('/:id', requirePermission('hr.assets.damages.view'), async (req, res)
 
     const { id } = req.params;
 
-    const damage = await prisma.assetDamage.findFirst({
+    const damage = await prisma.inventoryDamage.findFirst({
       where: {
         id,
         orgId: req.org.id,
       },
       include: {
-        asset: {
+        item: {
           include: {
             category: true,
             images: true,
@@ -189,9 +189,9 @@ router.post('/', requirePermission('hr.assets.damages.create'), async (req, res)
     }
 
     // Check if asset exists
-    const asset = await prisma.employeeAsset.findFirst({
+    const asset = await prisma.inventoryItem.findFirst({
       where: {
-        id: assetId,
+        id: assetId as string,
         orgId: req.org.id,
       },
     });
@@ -218,7 +218,7 @@ router.post('/', requirePermission('hr.assets.damages.create'), async (req, res)
 
     // Check if assignment exists (if provided)
     if (assignmentId) {
-      const assignment = await prisma.assetAssignment.findFirst({
+      const assignment = await prisma.inventoryAssignment.findFirst({
         where: {
           id: assignmentId,
           orgId: req.org.id,
@@ -231,10 +231,10 @@ router.post('/', requirePermission('hr.assets.damages.create'), async (req, res)
       }
     }
 
-    const damage = await prisma.assetDamage.create({
+    const damage = await prisma.inventoryDamage.create({
       data: {
         orgId: req.org.id,
-        assetId,
+        itemId: assetId,
         employeeId: employeeId || null,
         assignmentId: assignmentId || null,
         damageType,
@@ -246,7 +246,7 @@ router.post('/', requirePermission('hr.assets.damages.create'), async (req, res)
         status: 'reported',
       },
       include: {
-        asset: {
+        item: {
           select: {
             id: true,
             name: true,
@@ -272,7 +272,7 @@ router.post('/', requirePermission('hr.assets.damages.create'), async (req, res)
 
     // Update asset condition if severe damage
     if (severity === 'severe' || severity === 'total') {
-      await prisma.employeeAsset.update({
+      await prisma.inventoryItem.update({
         where: { id: assetId },
         data: {
           condition: 'damaged',
@@ -310,13 +310,13 @@ router.put('/:id/review', requirePermission('hr.assets.damages.review'), async (
       return;
     }
 
-    const damage = await prisma.assetDamage.findFirst({
+    const damage = await prisma.inventoryDamage.findFirst({
       where: {
         id,
         orgId: req.org.id,
       },
       include: {
-        asset: true,
+        item: true,
       },
     });
 
@@ -325,7 +325,7 @@ router.put('/:id/review', requirePermission('hr.assets.damages.review'), async (
       return;
     }
 
-    const updated = await prisma.assetDamage.update({
+    const updated = await prisma.inventoryDamage.update({
       where: { id },
       data: {
         status,
@@ -334,7 +334,7 @@ router.put('/:id/review', requirePermission('hr.assets.damages.review'), async (
         resolutionNotes: resolutionNotes || null,
       },
       include: {
-        asset: {
+        item: {
           select: {
             id: true,
             name: true,
@@ -360,16 +360,16 @@ router.put('/:id/review', requirePermission('hr.assets.damages.review'), async (
 
     // Update asset status based on damage resolution
     if (status === 'repaired') {
-      await prisma.employeeAsset.update({
-        where: { id: damage.assetId },
+      await prisma.inventoryItem.update({
+        where: { id: damage.itemId },
         data: {
           condition: 'refurbished',
           status: 'available',
         },
       });
     } else if (status === 'written_off') {
-      await prisma.employeeAsset.update({
-        where: { id: damage.assetId },
+      await prisma.inventoryItem.update({
+        where: { id: damage.itemId },
         data: {
           condition: 'damaged',
           status: 'retired',

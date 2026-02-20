@@ -34,7 +34,7 @@ router.get('/', requirePermission('hr.requests.view'), async (req: Request, res:
       where.requestType = requestType;
     }
 
-    const requests = await prisma.employeeRequest.findMany({
+    const requests = await (prisma as any).employeeRequest.findMany({
       where,
       include: {
         employee: {
@@ -91,7 +91,7 @@ router.get('/:id', requirePermission('hr.requests.view'), async (req: Request, r
 
     const { id } = req.params;
 
-    const request = await prisma.employeeRequest.findFirst({
+    const request = await (prisma as any).employeeRequest.findFirst({
       where: {
         id,
         orgId: req.org.id,
@@ -175,7 +175,7 @@ router.post('/', requirePermission('hr.requests.create'), async (req: Request, r
       return;
     }
 
-    const request = await prisma.employeeRequest.create({
+    const request = await (prisma as any).employeeRequest.create({
       data: {
         orgId: req.org.id,
         employeeId,
@@ -222,7 +222,7 @@ router.put('/:id', requirePermission('hr.requests.edit'), async (req: Request, r
     const { id } = req.params;
     const { status, priority, notes, approvedById, rejectionReason } = req.body;
 
-    const request = await prisma.employeeRequest.findFirst({
+    const request = await (prisma as any).employeeRequest.findFirst({
       where: {
         id,
         orgId: req.org.id,
@@ -259,7 +259,7 @@ router.put('/:id', requirePermission('hr.requests.edit'), async (req: Request, r
       updateData.notes = notes;
     }
 
-    const updated = await prisma.employeeRequest.update({
+    const updated = await (prisma as any).employeeRequest.update({
       where: { id },
       data: updateData,
       include: {
@@ -305,7 +305,7 @@ router.delete('/:id', requirePermission('hr.requests.delete'), async (req: Reque
 
     const { id } = req.params;
 
-    const request = await prisma.employeeRequest.findFirst({
+    const request = await (prisma as any).employeeRequest.findFirst({
       where: {
         id,
         orgId: req.org.id,
@@ -317,7 +317,7 @@ router.delete('/:id', requirePermission('hr.requests.delete'), async (req: Reque
       return;
     }
 
-    await prisma.employeeRequest.delete({
+    await (prisma as any).employeeRequest.delete({
       where: { id },
     });
 

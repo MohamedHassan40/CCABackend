@@ -47,7 +47,7 @@ router.get('/', requirePermission('hr.announcements.view'), async (req: Request,
       where.isPublished = isPublished === 'true';
     }
 
-    const announcements = await prisma.hrAnnouncement.findMany({
+    const announcements = await prisma.announcement.findMany({
       where,
       include: {
         createdBy: {
@@ -80,7 +80,7 @@ router.get('/:id', requirePermission('hr.announcements.view'), async (req: Reque
     const { id } = req.params;
     const { employeeId } = req.query;
 
-    const announcement = await prisma.hrAnnouncement.findFirst({
+    const announcement = await prisma.announcement.findFirst({
       where: {
         id,
         orgId: req.org.id,
@@ -100,19 +100,20 @@ router.get('/:id', requirePermission('hr.announcements.view'), async (req: Reque
       return;
     }
 
-    // Mark as viewed if employeeId is provided
-    if (employeeId && announcement.isPublished) {
+    // Mark as viewed if memberEmail (or employeeId for backwards compat) is provided
+    const memberEmail = (req.query.memberEmail as string) || (employeeId ? `${employeeId}@employee` : null);
+    if (memberEmail && announcement.isPublished) {
       try {
-        await prisma.hrAnnouncementView.upsert({
+        await prisma.announcementView.upsert({
           where: {
-            announcementId_employeeId: {
+            announcementId_memberEmail: {
               announcementId: id,
-              employeeId: employeeId as string,
+              memberEmail,
             },
           },
           create: {
             announcementId: id,
-            employeeId: employeeId as string,
+            memberEmail,
           },
           update: {},
         });
@@ -144,7 +145,7 @@ router.post('/', requirePermission('hr.announcements.create'), async (req: Reque
       return;
     }
 
-    const announcement = await prisma.hrAnnouncement.create({
+    const announcement = await prisma.announcement.create({
       data: {
         orgId: req.org.id,
         title,
@@ -152,7 +153,6 @@ router.post('/', requirePermission('hr.announcements.create'), async (req: Reque
         type: type || 'info',
         priority: priority || 'normal',
         targetAudience: targetAudience || 'all',
-        department: targetAudience === 'department' ? department || null : null,
         isPublished: isPublished || false,
         publishedAt: isPublished ? new Date() : null,
         expiresAt: expiresAt ? new Date(expiresAt) : null,
@@ -183,7 +183,7 @@ router.put('/:id', requirePermission('hr.announcements.edit'), async (req: Reque
     const { id } = req.params;
     const { title, content, type, priority, targetAudience, department, isPublished, expiresAt } = req.body;
 
-    const announcement = await prisma.hrAnnouncement.findFirst({
+    const announcement = await prisma.announcement.findFirst({
       where: {
         id,
         orgId: req.org.id,
@@ -215,7 +215,7 @@ router.put('/:id', requirePermission('hr.announcements.edit'), async (req: Reque
       updateData.expiresAt = expiresAt ? new Date(expiresAt) : null;
     }
 
-    const updated = await prisma.hrAnnouncement.update({
+    const updated = await prisma.announcement.update({
       where: { id },
       data: updateData,
       include: {
@@ -245,7 +245,7 @@ router.delete('/:id', requirePermission('hr.announcements.delete'), async (req: 
 
     const { id } = req.params;
 
-    const announcement = await prisma.hrAnnouncement.findFirst({
+    const announcement = await prisma.announcement.findFirst({
       where: {
         id,
         orgId: req.org.id,
@@ -257,7 +257,7 @@ router.delete('/:id', requirePermission('hr.announcements.delete'), async (req: 
       return;
     }
 
-    await prisma.hrAnnouncement.delete({
+    await prisma.announcement.delete({
       where: { id },
     });
 

@@ -23,17 +23,17 @@ router.get('/', requirePermission('hr.assets.returns.view'), async (req, res) =>
     }
 
     if (assetId) {
-      where.assetId = assetId as string;
+      where.itemId = assetId as string;
     }
 
     if (assignmentId) {
       where.assignmentId = assignmentId as string;
     }
 
-    const returns = await prisma.assetReturn.findMany({
+    const returns = await prisma.inventoryReturn.findMany({
       where,
       include: {
-        asset: {
+        item: {
           select: {
             id: true,
             name: true,
@@ -88,13 +88,13 @@ router.get('/:id', requirePermission('hr.assets.returns.view'), async (req, res)
 
     const { id } = req.params;
 
-    const returnRecord = await prisma.assetReturn.findFirst({
+    const returnRecord = await prisma.inventoryReturn.findFirst({
       where: {
         id,
         orgId: req.org.id,
       },
       include: {
-        asset: {
+        item: {
           include: {
             category: true,
             images: true,
@@ -167,14 +167,14 @@ router.post('/', requirePermission('hr.assets.returns.create'), async (req, res)
     }
 
     // Check if assignment exists and is active
-    const assignment = await prisma.assetAssignment.findFirst({
+    const assignment = await prisma.inventoryAssignment.findFirst({
       where: {
         id: assignmentId,
         orgId: req.org.id,
         status: 'active',
       },
       include: {
-        asset: true,
+        item: true,
         employee: true,
         returns: {
           select: {
@@ -190,7 +190,7 @@ router.post('/', requirePermission('hr.assets.returns.create'), async (req, res)
     }
 
     // Calculate already returned quantity
-    const returnedQuantity = assignment.returns.reduce((sum, r) => sum + r.quantity, 0);
+    const returnedQuantity = assignment.returns.reduce((sum: number, r: { quantity: number }) => sum + r.quantity, 0);
     const remainingQuantity = assignment.quantity - returnedQuantity;
 
     if (quantity > remainingQuantity) {
@@ -201,11 +201,11 @@ router.post('/', requirePermission('hr.assets.returns.create'), async (req, res)
     }
 
     // Create return record
-    const returnRecord = await prisma.assetReturn.create({
+    const returnRecord = await prisma.inventoryReturn.create({
       data: {
         orgId: req.org.id,
         assignmentId,
-        assetId: assignment.assetId,
+        itemId: assignment.itemId,
         employeeId: assignment.employeeId,
         quantity,
         returnReason: returnReason || null,
@@ -215,7 +215,7 @@ router.post('/', requirePermission('hr.assets.returns.create'), async (req, res)
         processedAt: new Date(),
       },
       include: {
-        asset: {
+        item: {
           select: {
             id: true,
             name: true,
@@ -248,7 +248,7 @@ router.post('/', requirePermission('hr.assets.returns.create'), async (req, res)
     // Update assignment status if fully returned
     const newReturnedQuantity = returnedQuantity + quantity;
     if (newReturnedQuantity >= assignment.quantity) {
-      await prisma.assetAssignment.update({
+      await prisma.inventoryAssignment.update({
         where: { id: assignmentId },
         data: {
           status: 'returned',
@@ -260,8 +260,8 @@ router.post('/', requirePermission('hr.assets.returns.create'), async (req, res)
 
     // Update asset quantity if condition is good
     if (condition === 'good') {
-      await prisma.employeeAsset.update({
-        where: { id: assignment.assetId },
+      await prisma.inventoryItem.update({
+        where: { id: assignment.itemId },
         data: {
           quantity: {
             increment: quantity,
@@ -270,8 +270,8 @@ router.post('/', requirePermission('hr.assets.returns.create'), async (req, res)
       });
     } else {
       // If damaged, update asset condition or create damage record
-      await prisma.employeeAsset.update({
-        where: { id: assignment.assetId },
+      await prisma.inventoryItem.update({
+        where: { id: assignment.itemId },
         data: {
           condition: 'damaged',
         },

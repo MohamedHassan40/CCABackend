@@ -42,7 +42,7 @@ router.get('/', requirePermission('hr.assets.view'), async (req, res) => {
       ];
     }
 
-    const assets = await prisma.employeeAsset.findMany({
+    const assets = await prisma.inventoryItem.findMany({
       where,
       include: {
         category: {
@@ -89,7 +89,7 @@ router.get('/:id', requirePermission('hr.assets.view'), async (req, res) => {
 
     const { id } = req.params;
 
-    const asset = await prisma.employeeAsset.findFirst({
+    const asset = await prisma.inventoryItem.findFirst({
       where: {
         id,
         orgId: req.org.id,
@@ -186,7 +186,7 @@ router.post('/', requirePermission('hr.assets.create'), async (req, res) => {
       return;
     }
 
-    const asset = await prisma.employeeAsset.create({
+    const asset = await prisma.inventoryItem.create({
       data: {
         orgId: req.org.id,
         name,
@@ -242,7 +242,7 @@ router.put('/:id', requirePermission('hr.assets.edit'), async (req, res) => {
       notes,
     } = req.body;
 
-    const asset = await prisma.employeeAsset.findFirst({
+    const asset = await prisma.inventoryItem.findFirst({
       where: {
         id,
         orgId: req.org.id,
@@ -254,7 +254,7 @@ router.put('/:id', requirePermission('hr.assets.edit'), async (req, res) => {
       return;
     }
 
-    const updated = await prisma.employeeAsset.update({
+    const updated = await prisma.inventoryItem.update({
       where: { id },
       data: {
         ...(name !== undefined && { name }),
@@ -294,7 +294,7 @@ router.delete('/:id', requirePermission('hr.assets.delete'), async (req, res) =>
 
     const { id } = req.params;
 
-    const asset = await prisma.employeeAsset.findFirst({
+    const asset = await prisma.inventoryItem.findFirst({
       where: {
         id,
         orgId: req.org.id,
@@ -324,7 +324,7 @@ router.delete('/:id', requirePermission('hr.assets.delete'), async (req, res) =>
       return;
     }
 
-    await prisma.employeeAsset.delete({
+    await prisma.inventoryItem.delete({
       where: { id },
     });
 
@@ -351,7 +351,7 @@ router.post('/:id/images', requirePermission('hr.assets.edit'), async (req, res)
       return;
     }
 
-    const asset = await prisma.employeeAsset.findFirst({
+    const asset = await prisma.inventoryItem.findFirst({
       where: {
         id,
         orgId: req.org.id,
@@ -376,7 +376,7 @@ router.post('/:id/images', requirePermission('hr.assets.edit'), async (req, res)
         storageType: 'local',
         entityType: 'asset',
         entityId: id,
-        assetId: id,
+        inventoryItemId: id,
       },
     });
 
@@ -400,7 +400,7 @@ router.delete('/:id/images/:imageId', requirePermission('hr.assets.edit'), async
     const file = await prisma.file.findFirst({
       where: {
         id: imageId,
-        assetId: id,
+        inventoryItemId: id,
         organizationId: req.org.id,
       },
     });
@@ -433,14 +433,14 @@ router.get('/categories', requirePermission('hr.assets.categories.view'), async 
       return;
     }
 
-    const categories = await prisma.assetCategory.findMany({
+    const categories = await prisma.inventoryCategory.findMany({
       where: {
         orgId: req.org.id,
       },
       include: {
         _count: {
           select: {
-            assets: true,
+            items: true,
           },
         },
       },
@@ -472,7 +472,7 @@ router.post('/categories', requirePermission('hr.assets.categories.create'), asy
     }
 
     // Check if category with same name exists
-    const existing = await prisma.assetCategory.findFirst({
+    const existing = await prisma.inventoryCategory.findFirst({
       where: {
         orgId: req.org.id,
         name,
@@ -484,7 +484,7 @@ router.post('/categories', requirePermission('hr.assets.categories.create'), asy
       return;
     }
 
-    const category = await prisma.assetCategory.create({
+    const category = await prisma.inventoryCategory.create({
       data: {
         orgId: req.org.id,
         name,
@@ -510,7 +510,7 @@ router.put('/categories/:id', requirePermission('hr.assets.categories.edit'), as
     const { id } = req.params;
     const { name, description, isActive } = req.body;
 
-    const category = await prisma.assetCategory.findFirst({
+    const category = await prisma.inventoryCategory.findFirst({
       where: {
         id,
         orgId: req.org.id,
@@ -524,7 +524,7 @@ router.put('/categories/:id', requirePermission('hr.assets.categories.edit'), as
 
     // Check if new name conflicts with existing category
     if (name && name !== category.name) {
-      const existing = await prisma.assetCategory.findFirst({
+      const existing = await prisma.inventoryCategory.findFirst({
         where: {
           orgId: req.org.id,
           name,
@@ -538,7 +538,7 @@ router.put('/categories/:id', requirePermission('hr.assets.categories.edit'), as
       }
     }
 
-    const updated = await prisma.assetCategory.update({
+    const updated = await prisma.inventoryCategory.update({
       where: { id },
       data: {
         ...(name !== undefined && { name }),
@@ -564,7 +564,7 @@ router.delete('/categories/:id', requirePermission('hr.assets.categories.delete'
 
     const { id } = req.params;
 
-    const category = await prisma.assetCategory.findFirst({
+    const category = await prisma.inventoryCategory.findFirst({
       where: {
         id,
         orgId: req.org.id,
@@ -572,7 +572,7 @@ router.delete('/categories/:id', requirePermission('hr.assets.categories.delete'
       include: {
         _count: {
           select: {
-            assets: true,
+            items: true,
           },
         },
       },
@@ -583,14 +583,14 @@ router.delete('/categories/:id', requirePermission('hr.assets.categories.delete'
       return;
     }
 
-    if (category._count.assets > 0) {
+    if (((category as { _count?: { items: number } })._count?.items ?? 0) > 0) {
       res.status(400).json({
         error: 'Cannot delete category with assets. Please remove or reassign assets first.',
       });
       return;
     }
 
-    await prisma.assetCategory.delete({
+    await prisma.inventoryCategory.delete({
       where: { id },
     });
 
@@ -612,7 +612,7 @@ router.get('/widgets/asset-count', requirePermission('hr.assets.view'), async (r
       return;
     }
 
-    const count = await prisma.employeeAsset.count({
+    const count = await prisma.inventoryItem.count({
       where: {
         orgId: req.org.id,
       },
@@ -632,7 +632,7 @@ router.get('/widgets/low-stock', requirePermission('hr.assets.view'), async (req
       return;
     }
 
-    const assets = await prisma.employeeAsset.findMany({
+    const assets = await prisma.inventoryItem.findMany({
       where: {
         orgId: req.org.id,
         minQuantity: { not: null },
@@ -646,7 +646,7 @@ router.get('/widgets/low-stock', requirePermission('hr.assets.view'), async (req
     });
 
     const lowStockAssets = assets.filter(
-      (asset) => asset.minQuantity !== null && asset.quantity <= asset.minQuantity
+      (asset: { minQuantity: number | null; quantity: number }) => asset.minQuantity !== null && asset.quantity <= asset.minQuantity
     );
 
     res.json({ count: lowStockAssets.length, assets: lowStockAssets });
