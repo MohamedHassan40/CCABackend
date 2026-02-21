@@ -751,7 +751,7 @@ router.post('/tickets/:id/time-entries', requirePermission('ticketing.tickets.ed
         user: { select: { id: true, name: true, email: true } },
       },
     });
-    await recordTicketHistory(id, req.user.id, 'time_logged', 'minutes', null, String(minutes));
+    await recordTicketHistory(id, req.user.id, 'time_logged', 'minutes', undefined, String(minutes));
     res.status(201).json(entry);
   } catch (error) {
     console.error('Error creating time entry:', error);
@@ -821,8 +821,8 @@ router.post('/tickets/:id/merge', requirePermission('ticketing.tickets.edit'), a
       where: { id },
       data: { status: 'merged', mergedIntoId: targetTicketId },
     });
-    await recordTicketHistory(id, req.user.id, 'merged', 'mergedIntoId', null, targetTicketId);
-    await recordTicketHistory(targetTicketId, req.user.id, 'merge_source', 'mergedTicketId', null, id);
+    await recordTicketHistory(id, req.user.id, 'merged', 'mergedIntoId', undefined, targetTicketId);
+    await recordTicketHistory(targetTicketId, req.user.id, 'merge_source', 'mergedTicketId', undefined, id);
     res.json({ message: 'Ticket merged successfully', mergedInto: targetTicketId });
   } catch (error) {
     console.error('Error merging ticket:', error);
