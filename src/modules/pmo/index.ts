@@ -40,6 +40,11 @@ export const pmoManifest: ModuleManifest = {
       label: 'Issues',
       permission: 'pmo.issues.view',
     },
+    {
+      path: '/pmo/milestones',
+      label: 'Milestones',
+      permission: 'pmo.projects.view',
+    },
   ],
   dashboardWidgets: [
     {
@@ -1459,6 +1464,155 @@ router.delete('/issues/:id', requirePermission('pmo.issues.delete'), async (req,
     res.json({ message: 'Issue deleted successfully' });
   } catch (error) {
     console.error('Error deleting issue:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// ============================================
+// MILESTONES
+// ============================================
+
+// GET /api/pmo/projects/:id/milestones
+router.get('/projects/:id/milestones', requirePermission('pmo.projects.view'), async (req, res) => {
+  try {
+    if (!req.org) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+
+    const { id } = req.params;
+
+    const project = await prisma.project.findFirst({
+      where: { id, orgId: req.org.id },
+    });
+
+    if (!project) {
+      res.status(404).json({ error: 'Project not found' });
+      return;
+    }
+
+    const milestones = await prisma.projectMilestone.findMany({
+      where: { projectId: id },
+      orderBy: { targetDate: 'asc' },
+    });
+
+    res.json(milestones);
+  } catch (error) {
+    console.error('Error fetching milestones:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// POST /api/pmo/projects/:id/milestones
+router.post('/projects/:id/milestones', requirePermission('pmo.projects.edit'), async (req, res) => {
+  try {
+    if (!req.org) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+
+    const { id } = req.params;
+    const { name, description, targetDate, status, notes } = req.body;
+
+    if (!name || !targetDate) {
+      res.status(400).json({ error: 'Name and target date are required' });
+      return;
+    }
+
+    const project = await prisma.project.findFirst({
+      where: { id, orgId: req.org.id },
+    });
+
+    if (!project) {
+      res.status(404).json({ error: 'Project not found' });
+      return;
+    }
+
+    const milestone = await prisma.projectMilestone.create({
+      data: {
+        projectId: id,
+        name,
+        description: description || null,
+        targetDate: new Date(targetDate),
+        status: status || 'pending',
+        notes: notes || null,
+      },
+    });
+
+    res.status(201).json(milestone);
+  } catch (error) {
+    console.error('Error creating milestone:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// PUT /api/pmo/milestones/:id
+router.put('/milestones/:id', requirePermission('pmo.projects.edit'), async (req, res) => {
+  try {
+    if (!req.org) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+
+    const { id } = req.params;
+    const { name, description, targetDate, completedAt, status, notes } = req.body;
+
+    const milestone = await prisma.projectMilestone.findFirst({
+      where: { id },
+      include: { project: true },
+    });
+
+    if (!milestone || milestone.project.orgId !== req.org.id) {
+      res.status(404).json({ error: 'Milestone not found' });
+      return;
+    }
+
+    const updated = await prisma.projectMilestone.update({
+      where: { id },
+      data: {
+        ...(name && { name }),
+        ...(description !== undefined && { description }),
+        ...(targetDate && { targetDate: new Date(targetDate) }),
+        ...(completedAt !== undefined && { completedAt: completedAt ? new Date(completedAt) : null }),
+        ...(status && { status }),
+        ...(notes !== undefined && { notes }),
+      },
+    });
+
+    res.json(updated);
+  } catch (error) {
+    console.error('Error updating milestone:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// DELETE /api/pmo/milestones/:id
+router.delete('/milestones/:id', requirePermission('pmo.projects.edit'), async (req, res) => {
+  try {
+    if (!req.org) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+
+    const { id } = req.params;
+
+    const milestone = await prisma.projectMilestone.findFirst({
+      where: { id },
+      include: { project: true },
+    });
+
+    if (!milestone || milestone.project.orgId !== req.org.id) {
+      res.status(404).json({ error: 'Milestone not found' });
+      return;
+    }
+
+    await prisma.projectMilestone.delete({
+      where: { id },
+    });
+
+    res.json({ message: 'Milestone deleted successfully' });
+  } catch (error) {
+    console.error('Error deleting milestone:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 });

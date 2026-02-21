@@ -541,3 +541,51 @@ router.get('/invoices', requirePermission('billing.subscriptions.view'), async (
   }
 });
 
+// GET /api/billing/invoices/:id - Get single invoice (payment) by ID
+router.get('/invoices/:id', requirePermission('billing.subscriptions.view'), async (req, res) => {
+  try {
+    if (!req.org) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+
+    const { id } = req.params;
+
+    const payment = await prisma.payment.findFirst({
+      where: {
+        id,
+        organizationId: req.org.id,
+      },
+      include: {
+        subscription: {
+          include: {
+            module: true,
+          },
+        },
+      },
+    });
+
+    if (!payment) {
+      res.status(404).json({ error: 'Invoice not found' });
+      return;
+    }
+
+    const invoice = {
+      id: payment.id,
+      invoiceNumber: `INV-${payment.id.substring(0, 8).toUpperCase()}`,
+      amount: payment.amountCents / 100,
+      currency: payment.currency,
+      status: payment.status,
+      paidAt: payment.paidAt,
+      invoiceUrl: payment.invoiceUrl,
+      module: payment.subscription?.module,
+      createdAt: payment.createdAt,
+    };
+
+    res.json(invoice);
+  } catch (error) {
+    console.error('Error fetching invoice:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+

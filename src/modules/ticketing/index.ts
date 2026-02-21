@@ -25,6 +25,16 @@ export const ticketingManifest: ModuleManifest = {
       permission: 'ticketing.tickets.view',
     },
     {
+      path: '/ticketing/templates',
+      label: 'Templates',
+      permission: 'ticketing.tickets.view',
+    },
+    {
+      path: '/ticketing/canned-replies',
+      label: 'Canned replies',
+      permission: 'ticketing.tickets.view',
+    },
+    {
       path: '/ticketing/reports',
       label: 'Reports',
       permission: 'ticketing.tickets.view',
@@ -54,6 +64,27 @@ export function registerTicketingModule(routerInstance: Router): void {
   });
 }
 
+// Helper: record ticket history
+async function recordTicketHistory(
+  ticketId: string,
+  userId: string | null,
+  action: string,
+  fieldName?: string,
+  oldValue?: string,
+  newValue?: string
+) {
+  await prisma.ticketHistory.create({
+    data: {
+      ticketId,
+      userId: userId || undefined,
+      action,
+      fieldName: fieldName || null,
+      oldValue: oldValue ?? null,
+      newValue: newValue ?? null,
+    },
+  });
+}
+
 // GET /api/ticketing/tickets
 router.get('/tickets', requirePermission('ticketing.tickets.view'), async (req, res) => {
   try {
@@ -62,7 +93,7 @@ router.get('/tickets', requirePermission('ticketing.tickets.view'), async (req, 
       return;
     }
 
-    const { status, priority, categoryId, search } = req.query;
+    const { status, priority, categoryId, search, tag, parentId } = req.query;
 
     const where: any = {
       orgId: req.org.id,
@@ -78,6 +109,16 @@ router.get('/tickets', requirePermission('ticketing.tickets.view'), async (req, 
 
     if (categoryId) {
       where.categoryId = categoryId;
+    }
+
+    if (tag) {
+      where.tags = { has: tag as string };
+    }
+
+    if (parentId === 'none' || parentId === '') {
+      where.parentTicketId = null;
+    } else if (parentId) {
+      where.parentTicketId = parentId;
     }
 
     if (search) {
@@ -105,13 +146,30 @@ router.get('/tickets', requirePermission('ticketing.tickets.view'), async (req, 
           },
         },
         category: true,
+        _count: {
+          select: { timeEntries: true },
+        },
       },
       orderBy: {
         createdAt: 'desc',
       },
     });
 
-    res.json(tickets);
+    // Add totalMinutes from time entries
+    const ticketsWithTime = await Promise.all(
+      tickets.map(async (t) => {
+        const sum = await prisma.ticketTimeEntry.aggregate({
+          where: { ticketId: t.id },
+          _sum: { minutes: true },
+        });
+        return {
+          ...t,
+          totalMinutes: sum._sum.minutes ?? 0,
+        };
+      })
+    );
+
+    res.json(ticketsWithTime);
   } catch (error) {
     console.error('Error fetching tickets:', error);
     res.status(500).json({ error: 'Internal server error' });
@@ -126,25 +184,65 @@ router.post('/tickets', requirePermission('ticketing.tickets.create'), async (re
       return;
     }
 
-    const { title, description, priority, assigneeId, categoryId } = req.body;
+    const {
+      title,
+      description,
+      priority,
+      assigneeId,
+      categoryId,
+      tags,
+      dueDate,
+      responseDueAt,
+      resolveBy,
+      parentTicketId,
+      templateId,
+    } = req.body;
 
-    if (!title) {
+    let finalTitle = title;
+    let finalDescription = description;
+    let finalPriority = priority || 'medium';
+    let finalCategoryId = categoryId || null;
+    let finalTags: string[] = Array.isArray(tags) ? tags : [];
+
+    if (templateId) {
+      const template = await prisma.ticketTemplate.findFirst({
+        where: { id: templateId, orgId: req.org.id },
+        include: { category: true },
+      });
+      if (template) {
+        finalTitle = finalTitle || template.title;
+        finalDescription = finalDescription ?? template.description ?? null;
+        finalPriority = template.priority;
+        finalCategoryId = finalCategoryId || template.categoryId;
+        if (template.tags?.length) finalTags = [...new Set([...finalTags, ...template.tags])];
+      }
+    }
+
+    if (!finalTitle) {
       res.status(400).json({ error: 'Title is required' });
       return;
     }
 
-    // Verify category if provided
-    if (categoryId) {
+    if (finalCategoryId) {
       const category = await prisma.ticketCategory.findFirst({
         where: {
-          id: categoryId,
+          id: finalCategoryId,
           orgId: req.org.id,
           isActive: true,
         },
       });
-
       if (!category) {
         res.status(400).json({ error: 'Invalid or inactive category' });
+        return;
+      }
+    }
+
+    if (parentTicketId) {
+      const parent = await prisma.ticket.findFirst({
+        where: { id: parentTicketId, orgId: req.org.id },
+      });
+      if (!parent) {
+        res.status(400).json({ error: 'Parent ticket not found' });
         return;
       }
     }
@@ -152,13 +250,18 @@ router.post('/tickets', requirePermission('ticketing.tickets.create'), async (re
     const ticket = await prisma.ticket.create({
       data: {
         orgId: req.org.id,
-        title,
-        description: description || null,
-        priority: priority || 'medium',
+        title: finalTitle,
+        description: finalDescription || null,
+        priority: finalPriority,
         status: 'open',
         createdById: req.user.id,
         assigneeId: assigneeId || null,
-        categoryId: categoryId || null,
+        categoryId: finalCategoryId,
+        tags: finalTags,
+        dueDate: dueDate ? new Date(dueDate) : null,
+        responseDueAt: responseDueAt ? new Date(responseDueAt) : null,
+        resolveBy: resolveBy ? new Date(resolveBy) : null,
+        parentTicketId: parentTicketId || null,
       },
       include: {
         createdBy: {
@@ -176,8 +279,11 @@ router.post('/tickets', requirePermission('ticketing.tickets.create'), async (re
           },
         },
         category: true,
+        parentTicket: true,
       },
     });
+
+    await recordTicketHistory(ticket.id, req.user.id, 'created');
 
     res.status(201).json(ticket);
   } catch (error) {
@@ -195,7 +301,19 @@ router.put('/tickets/:id', requirePermission('ticketing.tickets.edit'), async (r
     }
 
     const { id } = req.params;
-    const { title, description, priority, status, assigneeId, categoryId } = req.body;
+    const {
+      title,
+      description,
+      priority,
+      status,
+      assigneeId,
+      categoryId,
+      tags,
+      dueDate,
+      responseDueAt,
+      resolveBy,
+      parentTicketId,
+    } = req.body;
 
     const ticket = await prisma.ticket.findFirst({
       where: {
@@ -209,34 +327,57 @@ router.put('/tickets/:id', requirePermission('ticketing.tickets.edit'), async (r
       return;
     }
 
-    // Verify category if provided
-    if (categoryId !== undefined) {
-      if (categoryId) {
-        const category = await prisma.ticketCategory.findFirst({
-          where: {
-            id: categoryId,
-            orgId: req.org.id,
-            isActive: true,
-          },
-        });
+    if (categoryId !== undefined && categoryId) {
+      const category = await prisma.ticketCategory.findFirst({
+        where: {
+          id: categoryId,
+          orgId: req.org.id,
+          isActive: true,
+        },
+      });
+      if (!category) {
+        res.status(400).json({ error: 'Invalid or inactive category' });
+        return;
+      }
+    }
 
-        if (!category) {
-          res.status(400).json({ error: 'Invalid or inactive category' });
+    if (parentTicketId !== undefined && parentTicketId) {
+      if (parentTicketId === id) {
+        res.status(400).json({ error: 'Ticket cannot be its own parent' });
+        return;
+      }
+      if (parentTicketId) {
+        const parent = await prisma.ticket.findFirst({
+          where: { id: parentTicketId, orgId: req.org.id },
+        });
+        if (!parent) {
+          res.status(400).json({ error: 'Parent ticket not found' });
           return;
         }
       }
     }
 
+    const data: any = {};
+    if (title !== undefined) data.title = title;
+    if (description !== undefined) data.description = description || null;
+    if (priority !== undefined) data.priority = priority;
+    if (status !== undefined) {
+      data.status = status;
+      if (['resolved', 'closed'].includes(status) && !ticket.resolvedAt) {
+        data.resolvedAt = new Date();
+      }
+    }
+    if (assigneeId !== undefined) data.assigneeId = assigneeId || null;
+    if (categoryId !== undefined) data.categoryId = categoryId || null;
+    if (Array.isArray(tags)) data.tags = tags;
+    if (dueDate !== undefined) data.dueDate = dueDate ? new Date(dueDate) : null;
+    if (responseDueAt !== undefined) data.responseDueAt = responseDueAt ? new Date(responseDueAt) : null;
+    if (resolveBy !== undefined) data.resolveBy = resolveBy ? new Date(resolveBy) : null;
+    if (parentTicketId !== undefined) data.parentTicketId = parentTicketId || null;
+
     const updated = await prisma.ticket.update({
       where: { id },
-      data: {
-        ...(title && { title }),
-        ...(description !== undefined && { description: description || null }),
-        ...(priority && { priority }),
-        ...(status && { status }),
-        ...(assigneeId !== undefined && { assigneeId: assigneeId || null }),
-        ...(categoryId !== undefined && { categoryId: categoryId || null }),
-      },
+      data,
       include: {
         createdBy: {
           select: {
@@ -253,8 +394,28 @@ router.put('/tickets/:id', requirePermission('ticketing.tickets.edit'), async (r
           },
         },
         category: true,
+        parentTicket: true,
+        childTickets: true,
+        mergedInto: true,
       },
     });
+
+    // Record history for changed fields
+    if (title !== undefined && title !== ticket.title) {
+      await recordTicketHistory(id, req.user!.id, 'title_changed', 'title', ticket.title, title);
+    }
+    if (priority !== undefined && priority !== ticket.priority) {
+      await recordTicketHistory(id, req.user!.id, 'priority_changed', 'priority', ticket.priority, priority);
+    }
+    if (status !== undefined && status !== ticket.status) {
+      await recordTicketHistory(id, req.user!.id, 'status_changed', 'status', ticket.status, status);
+    }
+    if (assigneeId !== undefined && assigneeId !== ticket.assigneeId) {
+      await recordTicketHistory(id, req.user!.id, 'assignee_changed', 'assigneeId', ticket.assigneeId ?? '', assigneeId ?? '');
+    }
+    if (categoryId !== undefined && categoryId !== ticket.categoryId) {
+      await recordTicketHistory(id, req.user!.id, 'category_changed', 'categoryId', ticket.categoryId ?? '', categoryId ?? '');
+    }
 
     res.json(updated);
   } catch (error) {
@@ -327,6 +488,29 @@ router.get('/tickets/:id', requirePermission('ticketing.tickets.view'), async (r
           },
         },
         category: true,
+        parentTicket: {
+          select: {
+            id: true,
+            title: true,
+            status: true,
+          },
+        },
+        childTickets: {
+          select: {
+            id: true,
+            title: true,
+            status: true,
+            priority: true,
+            createdAt: true,
+          },
+        },
+        mergedInto: {
+          select: {
+            id: true,
+            title: true,
+            status: true,
+          },
+        },
         comments: {
           include: {
             user: {
@@ -355,6 +539,35 @@ router.get('/tickets/:id', requirePermission('ticketing.tickets.view'), async (r
             createdAt: 'desc',
           },
         },
+        timeEntries: {
+          include: {
+            user: {
+              select: {
+                id: true,
+                name: true,
+                email: true,
+              },
+            },
+          },
+          orderBy: {
+            loggedAt: 'desc',
+          },
+        },
+        history: {
+          include: {
+            user: {
+              select: {
+                id: true,
+                name: true,
+                email: true,
+              },
+            },
+          },
+          orderBy: {
+            createdAt: 'desc',
+          },
+          take: 100,
+        },
       },
     });
 
@@ -363,7 +576,12 @@ router.get('/tickets/:id', requirePermission('ticketing.tickets.view'), async (r
       return;
     }
 
-    res.json(ticket);
+    const totalMinutes = ticket.timeEntries.reduce((s, e) => s + e.minutes, 0);
+
+    res.json({
+      ...ticket,
+      totalMinutes,
+    });
   } catch (error) {
     console.error('Error fetching ticket:', error);
     res.status(500).json({ error: 'Internal server error' });
@@ -416,10 +634,13 @@ router.post('/tickets/:id/comments', requirePermission('ticketing.tickets.edit')
       },
     });
 
-    // Update ticket updatedAt
+    const updateData: { updatedAt: Date; firstResponseAt?: Date } = { updatedAt: new Date() };
+    if (!ticket.firstResponseAt && !(isInternal === true)) {
+      updateData.firstResponseAt = new Date();
+    }
     await prisma.ticket.update({
       where: { id },
-      data: { updatedAt: new Date() },
+      data: updateData,
     });
 
     res.status(201).json(comment);
@@ -464,6 +685,209 @@ router.delete('/tickets/:id/comments/:commentId', requirePermission('ticketing.t
     res.json({ message: 'Comment deleted successfully' });
   } catch (error) {
     console.error('Error deleting ticket comment:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// GET /api/ticketing/tickets/:id/time-entries
+router.get('/tickets/:id/time-entries', requirePermission('ticketing.tickets.view'), async (req, res) => {
+  try {
+    if (!req.org) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+    const { id } = req.params;
+    const ticket = await prisma.ticket.findFirst({
+      where: { id, orgId: req.org.id },
+    });
+    if (!ticket) {
+      res.status(404).json({ error: 'Ticket not found' });
+      return;
+    }
+    const entries = await prisma.ticketTimeEntry.findMany({
+      where: { ticketId: id },
+      include: {
+        user: { select: { id: true, name: true, email: true } },
+      },
+      orderBy: { loggedAt: 'desc' },
+    });
+    const totalMinutes = entries.reduce((s, e) => s + e.minutes, 0);
+    res.json({ entries, totalMinutes });
+  } catch (error) {
+    console.error('Error fetching time entries:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// POST /api/ticketing/tickets/:id/time-entries
+router.post('/tickets/:id/time-entries', requirePermission('ticketing.tickets.edit'), async (req, res) => {
+  try {
+    if (!req.org || !req.user) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+    const { id } = req.params;
+    const { minutes, description, loggedAt } = req.body;
+    if (minutes == null || minutes < 1) {
+      res.status(400).json({ error: 'Minutes is required and must be positive' });
+      return;
+    }
+    const ticket = await prisma.ticket.findFirst({
+      where: { id, orgId: req.org.id },
+    });
+    if (!ticket) {
+      res.status(404).json({ error: 'Ticket not found' });
+      return;
+    }
+    const entry = await prisma.ticketTimeEntry.create({
+      data: {
+        ticketId: id,
+        userId: req.user.id,
+        minutes: Number(minutes),
+        description: description || null,
+        loggedAt: loggedAt ? new Date(loggedAt) : new Date(),
+      },
+      include: {
+        user: { select: { id: true, name: true, email: true } },
+      },
+    });
+    await recordTicketHistory(id, req.user.id, 'time_logged', 'minutes', null, String(minutes));
+    res.status(201).json(entry);
+  } catch (error) {
+    console.error('Error creating time entry:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// GET /api/ticketing/tickets/:id/history
+router.get('/tickets/:id/history', requirePermission('ticketing.tickets.view'), async (req, res) => {
+  try {
+    if (!req.org) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+    const { id } = req.params;
+    const ticket = await prisma.ticket.findFirst({
+      where: { id, orgId: req.org.id },
+    });
+    if (!ticket) {
+      res.status(404).json({ error: 'Ticket not found' });
+      return;
+    }
+    const history = await prisma.ticketHistory.findMany({
+      where: { ticketId: id },
+      include: {
+        user: { select: { id: true, name: true, email: true } },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+    res.json(history);
+  } catch (error) {
+    console.error('Error fetching ticket history:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// POST /api/ticketing/tickets/:id/merge - Merge this ticket into targetTicketId
+router.post('/tickets/:id/merge', requirePermission('ticketing.tickets.edit'), async (req, res) => {
+  try {
+    if (!req.org || !req.user) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+    const { id } = req.params;
+    const { targetTicketId } = req.body;
+    if (!targetTicketId) {
+      res.status(400).json({ error: 'targetTicketId is required' });
+      return;
+    }
+    if (id === targetTicketId) {
+      res.status(400).json({ error: 'Cannot merge ticket into itself' });
+      return;
+    }
+    const [source, target] = await Promise.all([
+      prisma.ticket.findFirst({ where: { id, orgId: req.org.id } }),
+      prisma.ticket.findFirst({ where: { id: targetTicketId, orgId: req.org.id } }),
+    ]);
+    if (!source) {
+      res.status(404).json({ error: 'Ticket not found' });
+      return;
+    }
+    if (!target) {
+      res.status(404).json({ error: 'Target ticket not found' });
+      return;
+    }
+    await prisma.ticket.update({
+      where: { id },
+      data: { status: 'merged', mergedIntoId: targetTicketId },
+    });
+    await recordTicketHistory(id, req.user.id, 'merged', 'mergedIntoId', null, targetTicketId);
+    await recordTicketHistory(targetTicketId, req.user.id, 'merge_source', 'mergedTicketId', null, id);
+    res.json({ message: 'Ticket merged successfully', mergedInto: targetTicketId });
+  } catch (error) {
+    console.error('Error merging ticket:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// POST /api/ticketing/tickets/:id/pause-sla
+router.post('/tickets/:id/pause-sla', requirePermission('ticketing.tickets.edit'), async (req, res) => {
+  try {
+    if (!req.org || !req.user) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+    const { id } = req.params;
+    const ticket = await prisma.ticket.findFirst({
+      where: { id, orgId: req.org.id },
+    });
+    if (!ticket) {
+      res.status(404).json({ error: 'Ticket not found' });
+      return;
+    }
+    if (ticket.slaPausedAt) {
+      res.status(400).json({ error: 'SLA is already paused' });
+      return;
+    }
+    await prisma.ticket.update({
+      where: { id },
+      data: { slaPausedAt: new Date() },
+    });
+    await recordTicketHistory(id, req.user.id, 'sla_paused');
+    res.json({ message: 'SLA paused', slaPausedAt: new Date() });
+  } catch (error) {
+    console.error('Error pausing SLA:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// POST /api/ticketing/tickets/:id/resume-sla
+router.post('/tickets/:id/resume-sla', requirePermission('ticketing.tickets.edit'), async (req, res) => {
+  try {
+    if (!req.org || !req.user) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+    const { id } = req.params;
+    const ticket = await prisma.ticket.findFirst({
+      where: { id, orgId: req.org.id },
+    });
+    if (!ticket) {
+      res.status(404).json({ error: 'Ticket not found' });
+      return;
+    }
+    if (!ticket.slaPausedAt) {
+      res.status(400).json({ error: 'SLA is not paused' });
+      return;
+    }
+    await prisma.ticket.update({
+      where: { id },
+      data: { slaPausedAt: null },
+    });
+    await recordTicketHistory(id, req.user.id, 'sla_resumed');
+    res.json({ message: 'SLA resumed' });
+  } catch (error) {
+    console.error('Error resuming SLA:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
@@ -645,6 +1069,207 @@ router.delete('/categories/:id', requirePermission('ticketing.tickets.delete'), 
     res.json({ message: 'Category deleted successfully' });
   } catch (error) {
     console.error('Error deleting ticket category:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// ========== Ticket templates ==========
+router.get('/templates', requirePermission('ticketing.tickets.view'), async (req, res) => {
+  try {
+    if (!req.org) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+    const list = await prisma.ticketTemplate.findMany({
+      where: { orgId: req.org.id },
+      include: { category: { select: { id: true, name: true, color: true } } },
+      orderBy: { name: 'asc' },
+    });
+    res.json(list);
+  } catch (error) {
+    console.error('Error fetching templates:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+router.post('/templates', requirePermission('ticketing.tickets.create'), async (req, res) => {
+  try {
+    if (!req.org) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+    const { name, title, description, categoryId, priority, tags } = req.body;
+    if (!name || !title) {
+      res.status(400).json({ error: 'Name and title are required' });
+      return;
+    }
+    const template = await prisma.ticketTemplate.create({
+      data: {
+        orgId: req.org.id,
+        name,
+        title,
+        description: description || null,
+        categoryId: categoryId || null,
+        priority: priority || 'medium',
+        tags: Array.isArray(tags) ? tags : [],
+      },
+      include: { category: true },
+    });
+    res.status(201).json(template);
+  } catch (error) {
+    console.error('Error creating template:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+router.put('/templates/:id', requirePermission('ticketing.tickets.edit'), async (req, res) => {
+  try {
+    if (!req.org) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+    const { id } = req.params;
+    const { name, title, description, categoryId, priority, tags } = req.body;
+    const existing = await prisma.ticketTemplate.findFirst({
+      where: { id, orgId: req.org.id },
+    });
+    if (!existing) {
+      res.status(404).json({ error: 'Template not found' });
+      return;
+    }
+    const template = await prisma.ticketTemplate.update({
+      where: { id },
+      data: {
+        ...(name !== undefined && { name }),
+        ...(title !== undefined && { title }),
+        ...(description !== undefined && { description: description || null }),
+        ...(categoryId !== undefined && { categoryId: categoryId || null }),
+        ...(priority !== undefined && { priority }),
+        ...(Array.isArray(tags) && { tags }),
+      },
+      include: { category: true },
+    });
+    res.json(template);
+  } catch (error) {
+    console.error('Error updating template:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+router.delete('/templates/:id', requirePermission('ticketing.tickets.delete'), async (req, res) => {
+  try {
+    if (!req.org) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+    const { id } = req.params;
+    const existing = await prisma.ticketTemplate.findFirst({
+      where: { id, orgId: req.org.id },
+    });
+    if (!existing) {
+      res.status(404).json({ error: 'Template not found' });
+      return;
+    }
+    await prisma.ticketTemplate.delete({ where: { id } });
+    res.json({ message: 'Template deleted successfully' });
+  } catch (error) {
+    console.error('Error deleting template:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// ========== Canned replies ==========
+router.get('/canned-replies', requirePermission('ticketing.tickets.view'), async (req, res) => {
+  try {
+    if (!req.org) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+    const list = await prisma.cannedReply.findMany({
+      where: { orgId: req.org.id },
+      orderBy: { name: 'asc' },
+    });
+    res.json(list);
+  } catch (error) {
+    console.error('Error fetching canned replies:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+router.post('/canned-replies', requirePermission('ticketing.tickets.create'), async (req, res) => {
+  try {
+    if (!req.org) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+    const { name, content, shortcut } = req.body;
+    if (!name || !content) {
+      res.status(400).json({ error: 'Name and content are required' });
+      return;
+    }
+    const reply = await prisma.cannedReply.create({
+      data: {
+        orgId: req.org.id,
+        name,
+        content,
+        shortcut: shortcut || null,
+      },
+    });
+    res.status(201).json(reply);
+  } catch (error) {
+    console.error('Error creating canned reply:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+router.put('/canned-replies/:id', requirePermission('ticketing.tickets.edit'), async (req, res) => {
+  try {
+    if (!req.org) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+    const { id } = req.params;
+    const { name, content, shortcut } = req.body;
+    const existing = await prisma.cannedReply.findFirst({
+      where: { id, orgId: req.org.id },
+    });
+    if (!existing) {
+      res.status(404).json({ error: 'Canned reply not found' });
+      return;
+    }
+    const reply = await prisma.cannedReply.update({
+      where: { id },
+      data: {
+        ...(name !== undefined && { name }),
+        ...(content !== undefined && { content }),
+        ...(shortcut !== undefined && { shortcut: shortcut || null }),
+      },
+    });
+    res.json(reply);
+  } catch (error) {
+    console.error('Error updating canned reply:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+router.delete('/canned-replies/:id', requirePermission('ticketing.tickets.delete'), async (req, res) => {
+  try {
+    if (!req.org) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+    const { id } = req.params;
+    const existing = await prisma.cannedReply.findFirst({
+      where: { id, orgId: req.org.id },
+    });
+    if (!existing) {
+      res.status(404).json({ error: 'Canned reply not found' });
+      return;
+    }
+    await prisma.cannedReply.delete({ where: { id } });
+    res.json({ message: 'Canned reply deleted successfully' });
+  } catch (error) {
+    console.error('Error deleting canned reply:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 });

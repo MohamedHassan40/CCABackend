@@ -33,6 +33,8 @@ model User {
   auditLogs              AuditLog[]
   files                  File[]
   ticketComments         TicketComment[]
+  ticketTimeEntries       TicketTimeEntry[]
+  ticketHistory           TicketHistory[]
   productReviews         ProductReview[]
   carts                  Cart[]
   approvedLeaves         LeaveRequest[]         @relation("ApprovedLeaves")
@@ -94,6 +96,8 @@ model Organization {
   createdAt           DateTime              @default(now())
   updatedAt           DateTime              @updatedAt
   TicketCategory      TicketCategory[]
+  ticketTemplates     TicketTemplate[]
+  cannedReplies       CannedReply[]
   Cart                Cart[]
   LeaveType           LeaveType[]
   LeaveRequest        LeaveRequest[]
@@ -650,20 +654,39 @@ model Ticket {
   orgId             String
   title             String
   description       String?
-  status            String   @default("open") // "open", "in_progress", "resolved", "closed"
+  status            String   @default("open") // "open", "in_progress", "resolved", "closed", "merged"
   priority          String   @default("medium") // "low", "medium", "high", "urgent"
   categoryId        String?  // Ticket category
   createdById       String?  // null when submitted via public form
   assigneeId        String?
   submittedByEmail  String?  // For public submissions
   submittedByName   String?  // For public submissions
+  // Tags/labels (e.g. ["bug", "billing"])
+  tags              String[] @default([])
+  // SLA / due dates
+  dueDate           DateTime? // Overall due date
+  responseDueAt     DateTime? // First response SLA
+  resolveBy         DateTime? // Resolution SLA
+  slaPausedAt       DateTime? // When SLA timer was paused (null = not paused)
+  firstResponseAt   DateTime? // When first (public) response was sent
+  resolvedAt        DateTime? // When status became resolved/closed
+  // Parent/child
+  parentTicketId    String?
+  // Merge: when merged, status = "merged" and mergedIntoId = target ticket
+  mergedIntoId      String?
 
-  organization Organization    @relation(fields: [orgId], references: [id], onDelete: Cascade)
-  createdBy    User?            @relation("CreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
-  assignee     User?            @relation("AssignedTo", fields: [assigneeId], references: [id])
-  category     TicketCategory?  @relation(fields: [categoryId], references: [id], onDelete: SetNull)
-  comments     TicketComment[]
-  attachments  File[]           @relation("TicketAttachments")
+  organization   Organization    @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  createdBy      User?            @relation("CreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  assignee       User?            @relation("AssignedTo", fields: [assigneeId], references: [id])
+  category       TicketCategory?  @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  parentTicket   Ticket?          @relation("ChildTickets", fields: [parentTicketId], references: [id], onDelete: SetNull)
+  childTickets   Ticket[]         @relation("ChildTickets")
+  mergedInto     Ticket?          @relation("MergedTickets", fields: [mergedIntoId], references: [id], onDelete: SetNull)
+  mergedTickets  Ticket[]         @relation("MergedTickets")
+  comments       TicketComment[]
+  attachments    File[]           @relation("TicketAttachments")
+  timeEntries    TicketTimeEntry[]
+  history        TicketHistory[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -672,6 +695,79 @@ model Ticket {
   @@index([status])
   @@index([categoryId])
   @@index([submittedByEmail])
+  @@index([parentTicketId])
+  @@index([mergedIntoId])
+  @@index([dueDate])
+  @@index([resolveBy])
+}
+
+model TicketTimeEntry {
+  id          String   @id @default(cuid())
+  ticketId    String
+  userId      String
+  minutes     Int      // Time spent in minutes
+  description String?
+  loggedAt    DateTime @default(now()) // When the time was logged (can be backdated)
+
+  ticket Ticket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@index([ticketId])
+  @@index([userId])
+}
+
+model TicketHistory {
+  id        String   @id @default(cuid())
+  ticketId  String
+  userId    String?
+  action    String   // e.g. "status_changed", "assignee_changed", "priority_changed", "created", "merged", "sla_paused", "sla_resumed"
+  fieldName String?
+  oldValue  String?  // JSON or string representation
+  newValue  String?
+  createdAt DateTime @default(now())
+
+  ticket Ticket  @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  user   User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([ticketId])
+  @@index([userId])
+  @@index([createdAt])
+}
+
+model TicketTemplate {
+  id          String  @id @default(cuid())
+  orgId       String
+  name        String
+  title       String  // Default title (can contain placeholders)
+  description String?
+  categoryId  String?
+  priority    String  @default("medium")
+  tags        String[] @default([])
+
+  organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  category     TicketCategory? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([orgId])
+}
+
+model CannedReply {
+  id       String  @id @default(cuid())
+  orgId    String
+  name     String  // Short title for the reply
+  content  String  // Full text (can be HTML or plain)
+  shortcut String? // Optional shortcut e.g. "/greeting"
+
+  organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([orgId])
 }
 
 model TicketCategory {
@@ -682,8 +778,9 @@ model TicketCategory {
   color       String? // Hex color for UI
   isActive    Boolean @default(true)
 
-  organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  organization Organization   @relation(fields: [orgId], references: [id], onDelete: Cascade)
   tickets      Ticket[]
+  templates    TicketTemplate[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
