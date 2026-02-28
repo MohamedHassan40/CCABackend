@@ -23,13 +23,14 @@ export const authRateLimiter = rateLimit({
   legacyHeaders: false,
 });
 
-// Rate limiting for API endpoints
+// Rate limiting for API endpoints (generous to avoid "too many requests" during normal dashboard use)
 export const apiRateLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100, // Limit each IP to 100 requests per windowMs
+  windowMs: 1 * 60 * 1000, // 1 minute
+  max: 300, // 300 requests per minute per IP (was 100 per 15 min ≈ 6.6/min)
   message: 'Too many requests, please try again later.',
   standardHeaders: true,
   legacyHeaders: false,
+  skip: (req) => process.env.NODE_ENV === 'test',
 });
 
 // Rate limiting for password reset

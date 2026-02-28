@@ -4,8 +4,71 @@ import { requirePermission } from '../../middleware/permissions';
 
 const router = Router();
 
-// GET /api/hr/payroll - Get payroll records
+// GET /api/hr/payroll - Get payroll records (supports ?limit=50&offset=0)
 router.get('/', requirePermission('hr.payroll.view'), async (req, res) => {
+  try {
+    if (!req.org) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+
+    const { employeeId, startDate, endDate, status, limit: qLimit, offset: qOffset, page } = req.query;
+    const limit = Math.min(parseInt(String(qLimit || 50), 10) || 50, 200);
+    const offset = parseInt(String(qOffset || 0), 10) || 0;
+    const pageNum = parseInt(String(page), 10);
+    const skip = pageNum >= 1 ? (pageNum - 1) * limit : offset;
+
+    const where: any = {
+      orgId: req.org.id,
+    };
+
+    if (employeeId) {
+      where.employeeId = employeeId as string;
+    }
+
+    if (startDate && endDate) {
+      where.payPeriodStart = {
+        gte: new Date(startDate as string),
+      };
+      where.payPeriodEnd = {
+        lte: new Date(endDate as string),
+      };
+    }
+
+    if (status) {
+      where.status = status;
+    }
+
+    const [records, total] = await Promise.all([
+      prisma.payrollRecord.findMany({
+        where,
+        include: {
+          employee: {
+            select: {
+              id: true,
+              fullName: true,
+              email: true,
+              department: true,
+              position: true,
+            },
+          },
+        },
+        orderBy: { payPeriodStart: 'desc' },
+        take: limit,
+        skip,
+      }),
+      prisma.payrollRecord.count({ where }),
+    ]);
+
+    res.json({ data: records, total, limit, offset: skip });
+  } catch (error) {
+    console.error('Error fetching payroll records:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// GET /api/hr/payroll/export - Export payroll records as CSV (same filters as list)
+router.get('/export', requirePermission('hr.payroll.view'), async (req, res) => {
   try {
     if (!req.org) {
       res.status(401).json({ error: 'Unauthorized' });
@@ -40,7 +103,6 @@ router.get('/', requirePermission('hr.payroll.view'), async (req, res) => {
       include: {
         employee: {
           select: {
-            id: true,
             fullName: true,
             email: true,
             department: true,
@@ -48,14 +110,60 @@ router.get('/', requirePermission('hr.payroll.view'), async (req, res) => {
           },
         },
       },
-      orderBy: {
-        payPeriodStart: 'desc',
-      },
+      orderBy: { payPeriodStart: 'desc' },
+      take: 10000,
     });
 
-    res.json(records);
+    const escape = (v: string | number | null | undefined) => {
+      if (v == null) return '';
+      const s = String(v);
+      if (/[",\n\r]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+      return s;
+    };
+
+    const headers = [
+      'Employee',
+      'Email',
+      'Department',
+      'Position',
+      'Period Start',
+      'Period End',
+      'Base Salary',
+      'Allowances',
+      'Deductions',
+      'Tax',
+      'Net Salary',
+      'Currency',
+      'Status',
+      'Paid At',
+    ];
+    const rows = records.map((r) => [
+      r.employee.fullName,
+      r.employee.email ?? '',
+      r.employee.department ?? '',
+      r.employee.position ?? '',
+      r.payPeriodStart.toISOString().slice(0, 10),
+      r.payPeriodEnd.toISOString().slice(0, 10),
+      (r.baseSalary / 100).toFixed(2),
+      (r.allowances / 100).toFixed(2),
+      (r.deductions / 100).toFixed(2),
+      (r.taxAmount / 100).toFixed(2),
+      (r.netSalary / 100).toFixed(2),
+      r.currency,
+      r.status,
+      r.paidAt ? r.paidAt.toISOString().slice(0, 10) : '',
+    ]);
+
+    const csv =
+      headers.map(escape).join(',') +
+      '\n' +
+      rows.map((row) => row.map(escape).join(',')).join('\n');
+
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', 'attachment; filename="payroll-export.csv"');
+    res.send(csv);
   } catch (error) {
-    console.error('Error fetching payroll records:', error);
+    console.error('Error exporting payroll:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
@@ -97,20 +205,49 @@ router.post('/', requirePermission('hr.payroll.create'), async (req, res) => {
       return;
     }
 
-    const netSalary = baseSalary + (allowances || 0) - (deductions || 0) - (taxAmount || 0);
+    const base = Number(baseSalary);
+    const allow = Number(allowances || 0);
+    const deduct = Number(deductions || 0);
+    const tax = Number(taxAmount || 0);
+    if (base < 0 || allow < 0 || deduct < 0 || tax < 0) {
+      res.status(400).json({ error: 'Base salary, allowances, deductions, and tax cannot be negative' });
+      return;
+    }
+
+    const periodStart = new Date(payPeriodStart);
+    const periodEnd = new Date(payPeriodEnd);
+    if (periodStart >= periodEnd) {
+      res.status(400).json({ error: 'Pay period end must be after pay period start' });
+      return;
+    }
+
+    const overlapping = await prisma.payrollRecord.findFirst({
+      where: {
+        employeeId,
+        OR: [
+          { payPeriodStart: { lte: periodEnd }, payPeriodEnd: { gte: periodStart } },
+        ],
+      },
+    });
+    if (overlapping) {
+      res.status(400).json({ error: 'Overlapping pay period exists for this employee' });
+      return;
+    }
+
+    const netSalary = base + allow - deduct - tax;
 
     const payrollRecord = await prisma.payrollRecord.create({
       data: {
         orgId: req.org.id,
         employeeId,
-        payPeriodStart: new Date(payPeriodStart),
-        payPeriodEnd: new Date(payPeriodEnd),
-        baseSalary,
-        allowances: allowances || 0,
-        deductions: deductions || 0,
-        taxAmount: taxAmount || 0,
+        payPeriodStart: periodStart,
+        payPeriodEnd: periodEnd,
+        baseSalary: base,
+        allowances: allow,
+        deductions: deduct,
+        taxAmount: tax,
         netSalary,
-        currency: 'SAR', // Only SAR (Saudi Riyal) is supported
+        currency: 'SAR',
         status: 'draft',
       },
       include: {

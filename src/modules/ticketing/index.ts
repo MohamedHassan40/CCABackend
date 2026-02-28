@@ -93,7 +93,7 @@ router.get('/tickets', requirePermission('ticketing.tickets.view'), async (req, 
       return;
     }
 
-    const { status, priority, categoryId, search, tag, parentId } = req.query;
+    const { status, priority, categoryId, search, tag, parentId, assigneeId } = req.query;
 
     const where: any = {
       orgId: req.org.id,
@@ -109,6 +109,12 @@ router.get('/tickets', requirePermission('ticketing.tickets.view'), async (req, 
 
     if (categoryId) {
       where.categoryId = categoryId;
+    }
+
+    if (assigneeId === 'none' || assigneeId === '') {
+      where.assigneeId = null;
+    } else if (assigneeId) {
+      where.assigneeId = assigneeId as string;
     }
 
     if (tag) {
@@ -172,6 +178,75 @@ router.get('/tickets', requirePermission('ticketing.tickets.view'), async (req, 
     res.json(ticketsWithTime);
   } catch (error) {
     console.error('Error fetching tickets:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// GET /api/ticketing/tickets/export - Export tickets as CSV (same filters as list)
+router.get('/tickets/export', requirePermission('ticketing.tickets.view'), async (req, res) => {
+  try {
+    if (!req.org || !req.user) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+
+    const { status, priority, categoryId, search, tag, assigneeId } = req.query;
+
+    const where: any = { orgId: req.org.id };
+    if (status) where.status = status as string;
+    if (priority) where.priority = priority as string;
+    if (categoryId) where.categoryId = categoryId as string;
+    if (assigneeId === 'none' || assigneeId === '') where.assigneeId = null;
+    else if (assigneeId) where.assigneeId = assigneeId as string;
+    if (tag) where.tags = { has: tag as string };
+    if (search) {
+      where.OR = [
+        { title: { contains: search as string, mode: 'insensitive' } },
+        { description: { contains: search as string, mode: 'insensitive' } },
+      ];
+    }
+
+    const tickets = await prisma.ticket.findMany({
+      where,
+      include: {
+        createdBy: { select: { name: true, email: true } },
+        assignee: { select: { name: true, email: true } },
+        category: { select: { name: true } },
+      },
+      orderBy: { createdAt: 'desc' },
+      take: 10000,
+    });
+
+    const escape = (v: string | number | null | undefined) => {
+      if (v == null) return '';
+      const s = String(v);
+      if (/[",\n\r]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+      return s;
+    };
+
+    const headers = ['ID', 'Title', 'Status', 'Priority', 'Category', 'Created By', 'Assignee', 'Created At', 'Updated At'];
+    const rows = tickets.map((t) => [
+      t.id,
+      t.title,
+      t.status,
+      t.priority,
+      t.category?.name ?? '',
+      t.createdBy?.name ?? t.createdBy?.email ?? '',
+      t.assignee?.name ?? t.assignee?.email ?? '',
+      t.createdAt.toISOString().slice(0, 19),
+      t.updatedAt.toISOString().slice(0, 19),
+    ]);
+
+    const csv =
+      headers.map(escape).join(',') +
+      '\n' +
+      rows.map((row) => row.map(escape).join(',')).join('\n');
+
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', 'attachment; filename="tickets-export.csv"');
+    res.send(csv);
+  } catch (error) {
+    console.error('Error exporting tickets:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 });

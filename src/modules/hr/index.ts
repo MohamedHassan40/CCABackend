@@ -113,7 +113,7 @@ export function registerHrModule(routerInstance: Router): void {
   });
 }
 
-// GET /api/hr/employees
+// GET /api/hr/employees (supports ?limit=50&offset=0 or ?page=1&limit=50)
 router.get('/employees', requirePermission('hr.employees.view'), async (req, res) => {
   try {
     if (!req.org) {
@@ -121,18 +121,90 @@ router.get('/employees', requirePermission('hr.employees.view'), async (req, res
       return;
     }
 
-    const employees = await prisma.employee.findMany({
-      where: {
-        orgId: req.org.id,
-      },
-      orderBy: {
-        createdAt: 'desc',
-      },
-    });
+    const limit = Math.min(parseInt(String(req.query.limit || 50), 10) || 50, 200);
+    const offset = parseInt(String(req.query.offset || 0), 10) || 0;
+    const page = parseInt(String(req.query.page), 10);
+    const skip = page >= 1 ? (page - 1) * limit : offset;
+    const search = typeof req.query.search === 'string' ? req.query.search.trim() : '';
 
-    res.json(employees);
+    const where: any = { orgId: req.org.id };
+    if (search) {
+      where.OR = [
+        { fullName: { contains: search, mode: 'insensitive' } },
+        { email: { contains: search, mode: 'insensitive' } },
+        { position: { contains: search, mode: 'insensitive' } },
+        { department: { contains: search, mode: 'insensitive' } },
+      ];
+    }
+
+    const [employees, total] = await Promise.all([
+      prisma.employee.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        take: limit,
+        skip,
+      }),
+      prisma.employee.count({ where }),
+    ]);
+
+    res.json({ data: employees, total, limit, offset: skip });
   } catch (error) {
     console.error('Error fetching employees:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// GET /api/hr/employees/export - Export employees as CSV (same search as list)
+router.get('/employees/export', requirePermission('hr.employees.view'), async (req, res) => {
+  try {
+    if (!req.org) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+
+    const search = typeof req.query.search === 'string' ? req.query.search.trim() : '';
+    const where: any = { orgId: req.org.id };
+    if (search) {
+      where.OR = [
+        { fullName: { contains: search, mode: 'insensitive' } },
+        { email: { contains: search, mode: 'insensitive' } },
+        { position: { contains: search, mode: 'insensitive' } },
+        { department: { contains: search, mode: 'insensitive' } },
+      ];
+    }
+
+    const employees = await prisma.employee.findMany({
+      where,
+      orderBy: { createdAt: 'desc' },
+      take: 10000,
+    });
+
+    const escape = (v: string | number | null | undefined) => {
+      if (v == null) return '';
+      const s = String(v);
+      if (/[",\n\r]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+      return s;
+    };
+
+    const headers = ['Full Name', 'Email', 'Position', 'Department', 'Created At'];
+    const rows = employees.map((e) => [
+      e.fullName,
+      e.email ?? '',
+      e.position ?? '',
+      e.department ?? '',
+      e.createdAt.toISOString().slice(0, 10),
+    ]);
+
+    const csv =
+      headers.map(escape).join(',') +
+      '\n' +
+      rows.map((row) => row.map(escape).join(',')).join('\n');
+
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', 'attachment; filename="employees-export.csv"');
+    res.send(csv);
+  } catch (error) {
+    console.error('Error exporting employees:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 });

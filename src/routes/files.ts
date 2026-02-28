@@ -13,7 +13,7 @@ const upload = multer({
     fileSize: 10 * 1024 * 1024, // 10MB
   },
   fileFilter: (req, file, cb) => {
-    // Allow images and common document types
+    // Allow images, documents, and common support file types (e.g. for ticket attachments)
     const allowedMimes = [
       'image/jpeg',
       'image/png',
@@ -22,6 +22,11 @@ const upload = multer({
       'application/pdf',
       'application/msword',
       'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      'application/vnd.ms-excel',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'text/plain',
+      'text/csv',
+      'application/zip',
     ];
     if (allowedMimes.includes(file.mimetype)) {
       cb(null, true);
@@ -47,7 +52,18 @@ router.post('/upload', upload.single('file'), async (req: Request, res: Response
       return;
     }
 
-    const { entityType, entityId, folder } = req.body;
+    const { entityType, entityId, ticketId, folder } = req.body;
+
+    // If ticketId provided, verify ticket exists and belongs to org (for ticket attachments)
+    if (ticketId) {
+      const ticket = await prisma.ticket.findFirst({
+        where: { id: String(ticketId), orgId: req.org.id },
+      });
+      if (!ticket) {
+        res.status(404).json({ error: 'Ticket not found' });
+        return;
+      }
+    }
 
     // Upload file using storage service
     const uploadResult = await storageService.uploadFile(req.file, folder);
@@ -63,8 +79,9 @@ router.post('/upload', upload.single('file'), async (req: Request, res: Response
         url: uploadResult.url,
         storageType: uploadResult.storageType,
         storageKey: uploadResult.storageKey,
-        entityType: entityType || null,
-        entityId: entityId || null,
+        entityType: entityType || (ticketId ? 'ticket' : null),
+        entityId: entityId || (ticketId ? String(ticketId) : null),
+        ticketId: ticketId ? String(ticketId) : null,
       },
     });
 

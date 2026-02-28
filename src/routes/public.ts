@@ -619,7 +619,7 @@ router.get('/membership/verify/:token', async (req: Request, res: Response) => {
   }
 });
 
-// GET /api/public/tickets/:orgSlug/track?ticketId=xxx&email=xxx - Track ticket (public)
+// GET /api/public/tickets/:orgSlug/track?ticketId=xxx&email=xxx - Track ticket (public) with description and public comments
 router.get('/tickets/:orgSlug/track', async (req: Request, res: Response) => {
   try {
     const { orgSlug } = req.params;
@@ -639,17 +639,7 @@ router.get('/tickets/:orgSlug/track', async (req: Request, res: Response) => {
       return;
     }
 
-    type TrackTicketResult = {
-      id: string;
-      title: string;
-      status: string;
-      priority: string;
-      createdAt: Date;
-      updatedAt: Date;
-      submittedByEmail?: string | null;
-      createdBy?: { email: string } | null;
-    };
-    const raw = await prisma.ticket.findFirst({
+    const ticket = await prisma.ticket.findFirst({
       where: {
         id: String(ticketId),
         orgId: org.id,
@@ -657,15 +647,16 @@ router.get('/tickets/:orgSlug/track', async (req: Request, res: Response) => {
       select: {
         id: true,
         title: true,
+        description: true,
         status: true,
         priority: true,
         createdAt: true,
         updatedAt: true,
         submittedByEmail: true,
+        submittedByName: true,
         createdBy: { select: { email: true } },
-      } as any,
+      },
     });
-    const ticket = raw as TrackTicketResult | null;
 
     if (!ticket) {
       res.status(404).json({ error: 'Ticket not found' });
@@ -681,16 +672,122 @@ router.get('/tickets/:orgSlug/track', async (req: Request, res: Response) => {
       return;
     }
 
+    const publicComments = await prisma.ticketComment.findMany({
+      where: {
+        ticketId: ticket.id,
+        isInternal: false,
+      },
+      orderBy: { createdAt: 'asc' },
+      select: {
+        id: true,
+        content: true,
+        createdAt: true,
+        userId: true,
+        submittedByEmail: true,
+        submittedByName: true,
+        user: {
+          select: {
+            name: true,
+            email: true,
+          },
+        },
+      },
+    });
+
+    const comments = publicComments.map((c) => ({
+      id: c.id,
+      content: c.content,
+      createdAt: c.createdAt,
+      authorName: c.user?.name || c.submittedByName || c.user?.email || c.submittedByEmail || 'Support',
+      authorEmail: c.user?.email || c.submittedByEmail || null,
+    }));
+
     res.json({
       id: ticket.id,
       title: ticket.title,
+      description: ticket.description,
       status: ticket.status,
       priority: ticket.priority,
       createdAt: ticket.createdAt,
       updatedAt: ticket.updatedAt,
+      comments,
     });
   } catch (error) {
     console.error('Error tracking public ticket:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// POST /api/public/tickets/:orgSlug/reply - Add public reply to ticket (no auth)
+router.post('/tickets/:orgSlug/reply', async (req: Request, res: Response) => {
+  try {
+    const { orgSlug } = req.params;
+    const { ticketId, email, content, name } = req.body;
+
+    if (!ticketId || !email || !content) {
+      res.status(400).json({ error: 'ticketId, email, and content are required' });
+      return;
+    }
+
+    const org = await prisma.organization.findUnique({
+      where: { slug: orgSlug, isActive: true },
+      select: { id: true },
+    });
+    if (!org) {
+      res.status(404).json({ error: 'Organization not found' });
+      return;
+    }
+
+    const ticket = await prisma.ticket.findFirst({
+      where: {
+        id: String(ticketId),
+        orgId: org.id,
+      },
+      select: {
+        id: true,
+        submittedByEmail: true,
+        createdBy: { select: { email: true } },
+        firstResponseAt: true,
+      },
+    });
+
+    if (!ticket) {
+      res.status(404).json({ error: 'Ticket not found' });
+      return;
+    }
+
+    const emailMatch =
+      (ticket.submittedByEmail && ticket.submittedByEmail.toLowerCase() === String(email).toLowerCase()) ||
+      (ticket.createdBy?.email && ticket.createdBy.email.toLowerCase() === String(email).toLowerCase());
+
+    if (!emailMatch) {
+      res.status(403).json({ error: 'Email does not match this ticket' });
+      return;
+    }
+
+    await prisma.ticketComment.create({
+      data: {
+        ticketId: ticket.id,
+        userId: null,
+        submittedByEmail: String(email).trim(),
+        submittedByName: name ? String(name).trim() : null,
+        content: String(content).trim(),
+        isInternal: false,
+      },
+    });
+
+    const updateData: { updatedAt: Date; firstResponseAt?: Date } = { updatedAt: new Date() };
+    if (!ticket.firstResponseAt) {
+      updateData.firstResponseAt = new Date();
+    }
+    await prisma.ticket.update({
+      where: { id: ticket.id },
+      data: updateData,
+    });
+
+    res.status(201).json({ message: 'Reply sent successfully' });
+  } catch (error) {
+    console.error('Error adding public reply:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 });

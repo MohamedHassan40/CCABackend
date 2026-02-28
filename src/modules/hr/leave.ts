@@ -189,7 +189,7 @@ router.delete('/types/:id', requirePermission('hr.leave.manage'), async (req, re
 // LEAVE REQUESTS
 // ============================================
 
-// GET /api/hr/leave/requests - Get all leave requests
+// GET /api/hr/leave/requests - Get all leave requests (supports ?limit=50&offset=0)
 router.get('/requests', requirePermission('hr.leave.view'), async (req, res) => {
   try {
     if (!req.org) {
@@ -197,7 +197,11 @@ router.get('/requests', requirePermission('hr.leave.view'), async (req, res) => 
       return;
     }
 
-    const { status, employeeId } = req.query;
+    const { status, employeeId, limit: qLimit, offset: qOffset, page } = req.query;
+    const limit = Math.min(parseInt(String(qLimit || 50), 10) || 50, 200);
+    const offset = parseInt(String(qOffset || 0), 10) || 0;
+    const pageNum = parseInt(String(page), 10);
+    const skip = pageNum >= 1 ? (pageNum - 1) * limit : offset;
 
     const where: any = {
       orgId: req.org.id,
@@ -211,34 +215,97 @@ router.get('/requests', requirePermission('hr.leave.view'), async (req, res) => 
       where.employeeId = employeeId;
     }
 
+    const [requests, total] = await Promise.all([
+      prisma.leaveRequest.findMany({
+        where,
+        include: {
+          employee: {
+            select: {
+              id: true,
+              fullName: true,
+              email: true,
+              department: true,
+            },
+          },
+          leaveType: true,
+          approvedBy: {
+            select: {
+              id: true,
+              name: true,
+              email: true,
+            },
+          },
+        },
+        orderBy: { createdAt: 'desc' },
+        take: limit,
+        skip,
+      }),
+      prisma.leaveRequest.count({ where }),
+    ]);
+
+    res.json({ data: requests, total, limit, offset: skip });
+  } catch (error) {
+    console.error('Error fetching leave requests:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// GET /api/hr/leave/requests/export - Export leave requests as CSV (same filters as list)
+router.get('/requests/export', requirePermission('hr.leave.view'), async (req, res) => {
+  try {
+    if (!req.org) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+
+    const { status, employeeId } = req.query;
+    const where: any = { orgId: req.org.id };
+    if (status) where.status = status as string;
+    if (employeeId) where.employeeId = employeeId as string;
+
     const requests = await prisma.leaveRequest.findMany({
       where,
       include: {
-        employee: {
-          select: {
-            id: true,
-            fullName: true,
-            email: true,
-            department: true,
-          },
-        },
-        leaveType: true,
-        approvedBy: {
-          select: {
-            id: true,
-            name: true,
-            email: true,
-          },
-        },
+        employee: { select: { fullName: true, email: true, department: true } },
+        leaveType: { select: { name: true } },
+        approvedBy: { select: { name: true, email: true } },
       },
-      orderBy: {
-        createdAt: 'desc',
-      },
+      orderBy: { createdAt: 'desc' },
+      take: 10000,
     });
 
-    res.json(requests);
+    const escape = (v: string | number | null | undefined) => {
+      if (v == null) return '';
+      const s = String(v);
+      if (/[",\n\r]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+      return s;
+    };
+
+    const headers = ['Employee', 'Email', 'Department', 'Leave Type', 'Start Date', 'End Date', 'Days', 'Reason', 'Status', 'Approved By', 'Approved At'];
+    const rows = requests.map((r) => [
+      r.employee.fullName,
+      r.employee.email ?? '',
+      r.employee.department ?? '',
+      r.leaveType.name,
+      r.startDate.toISOString().slice(0, 10),
+      r.endDate.toISOString().slice(0, 10),
+      r.days,
+      r.reason ?? '',
+      r.status,
+      r.approvedBy?.name ?? r.approvedBy?.email ?? '',
+      r.approvedAt ? r.approvedAt.toISOString().slice(0, 10) : '',
+    ]);
+
+    const csv =
+      headers.map(escape).join(',') +
+      '\n' +
+      rows.map((row) => row.map(escape).join(',')).join('\n');
+
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', 'attachment; filename="leave-requests-export.csv"');
+    res.send(csv);
   } catch (error) {
-    console.error('Error fetching leave requests:', error);
+    console.error('Error exporting leave requests:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
@@ -288,10 +355,35 @@ router.post('/requests', requirePermission('hr.leave.create'), async (req, res) 
     // Calculate days
     const start = new Date(startDate);
     const end = new Date(endDate);
+    const now = new Date();
+    now.setHours(0, 0, 0, 0);
+
+    if (start < now) {
+      res.status(400).json({ error: 'Start date cannot be in the past' });
+      return;
+    }
+
     const days = Math.ceil((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24)) + 1;
 
     if (days < 1) {
-      res.status(400).json({ error: 'End date must be after start date' });
+      res.status(400).json({ error: 'End date must be after or equal to start date' });
+      return;
+    }
+
+    // Check overlap with existing approved or pending leave for same employee
+    const overlapping = await prisma.leaveRequest.findFirst({
+      where: {
+        employeeId,
+        status: { in: ['pending', 'approved'] },
+        OR: [
+          { startDate: { lte: end }, endDate: { gte: start } },
+        ],
+      },
+    });
+    if (overlapping) {
+      res.status(400).json({
+        error: 'This leave period overlaps with an existing approved or pending leave request',
+      });
       return;
     }
 
@@ -471,6 +563,41 @@ router.put('/requests/:id/reject', requirePermission('hr.leave.approve'), async 
     res.json(updated);
   } catch (error) {
     console.error('Error rejecting leave request:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// PUT /api/hr/leave/requests/:id/cancel - Cancel leave request (pending only)
+router.put('/requests/:id/cancel', requirePermission('hr.leave.create'), async (req, res) => {
+  try {
+    if (!req.org) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+
+    const { id } = req.params;
+
+    const leaveRequest = await prisma.leaveRequest.findFirst({
+      where: {
+        id,
+        orgId: req.org.id,
+        status: 'pending',
+      },
+    });
+
+    if (!leaveRequest) {
+      res.status(404).json({ error: 'Leave request not found or already processed' });
+      return;
+    }
+
+    const updated = await prisma.leaveRequest.update({
+      where: { id },
+      data: { status: 'cancelled' },
+    });
+
+    res.json(updated);
+  } catch (error) {
+    console.error('Error cancelling leave request:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 });

@@ -791,14 +791,16 @@ model TicketCategory {
 }
 
 model TicketComment {
-  id         String  @id @default(cuid())
-  ticketId   String
-  userId     String
-  content    String
-  isInternal Boolean @default(false) // Internal note vs public comment
+  id                String   @id @default(cuid())
+  ticketId          String
+  userId            String?  // null for public/customer replies
+  submittedByEmail  String?  // for public replies
+  submittedByName   String?
+  content           String
+  isInternal        Boolean  @default(false) // Internal note vs public comment
 
   ticket Ticket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
-  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user   User?  @relation(fields: [userId], references: [id], onDelete: SetNull)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

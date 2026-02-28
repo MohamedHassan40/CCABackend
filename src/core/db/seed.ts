@@ -417,6 +417,8 @@ async function main() {
     { key: 'membership.announcements.delete', name: 'Delete Announcements' },
     { key: 'membership.messages.view', name: 'View Messages' },
     { key: 'membership.messages.create', name: 'Create Messages' },
+    { key: 'membership.messages.edit', name: 'Edit Messages' },
+    { key: 'membership.messages.delete', name: 'Delete Messages' },
   ];
 
   const createdPermissions: { id: string; key: string }[] = [];

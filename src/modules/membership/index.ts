@@ -435,7 +435,7 @@ router.get('/members', requirePermission('membership.members.view'), async (req:
       return;
     }
 
-    const { status, membershipTypeId, search, expired } = req.query;
+    const { status, membershipTypeId, search, expired, expiringWithinDays } = req.query;
 
     const where: any = {
       orgId: req.org.id,
@@ -447,6 +447,15 @@ router.get('/members', requirePermission('membership.members.view'), async (req:
     if (expired === 'true') {
       where.endDate = { lt: new Date() };
       where.status = { not: 'expired' };
+    }
+
+    const days = expiringWithinDays ? parseInt(String(expiringWithinDays), 10) : NaN;
+    if (!isNaN(days) && days > 0) {
+      const now = new Date();
+      const future = new Date(now);
+      future.setDate(future.getDate() + days);
+      where.status = 'active';
+      where.endDate = { gte: now, lte: future };
     }
 
     if (search) {
@@ -486,6 +495,82 @@ router.get('/members', requirePermission('membership.members.view'), async (req:
     res.json(memberships);
   } catch (error: any) {
     console.error('Error fetching memberships:', error);
+    res.status(500).json({ error: error.message || 'Internal server error' });
+  }
+});
+
+// GET /api/membership/members/export - Export members as CSV (same filters as list)
+router.get('/members/export', requirePermission('membership.members.view'), async (req: Request, res: Response) => {
+  try {
+    if (!req.org) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+
+    const { status, membershipTypeId, search, expired, expiringWithinDays } = req.query;
+
+    const where: any = { orgId: req.org.id };
+    if (status) where.status = status as string;
+    if (membershipTypeId) where.membershipTypeId = membershipTypeId as string;
+    if (expired === 'true') {
+      where.endDate = { lt: new Date() };
+      where.status = { not: 'expired' };
+    }
+    const days = expiringWithinDays ? parseInt(String(expiringWithinDays), 10) : NaN;
+    if (!isNaN(days) && days > 0) {
+      const now = new Date();
+      const future = new Date(now);
+      future.setDate(future.getDate() + days);
+      where.status = 'active';
+      where.endDate = { gte: now, lte: future };
+    }
+    if (search) {
+      where.OR = [
+        { memberName: { contains: search as string, mode: 'insensitive' } },
+        { memberEmail: { contains: search as string, mode: 'insensitive' } },
+        { memberPhone: { contains: search as string, mode: 'insensitive' } },
+      ];
+    }
+
+    const memberships = await prisma.memberMembership.findMany({
+      where,
+      include: {
+        membershipType: { select: { name: true } },
+      },
+      orderBy: { createdAt: 'desc' },
+      take: 10000,
+    });
+
+    const escape = (v: string | number | null | undefined) => {
+      if (v == null) return '';
+      const s = String(v);
+      if (/[",\n\r]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+      return s;
+    };
+
+    const headers = ['Name', 'Email', 'Phone', 'Type', 'Status', 'Start Date', 'End Date', 'Payment Status', 'Created At'];
+    const rows = memberships.map((m) => [
+      m.memberName,
+      m.memberEmail,
+      m.memberPhone ?? '',
+      m.membershipType.name,
+      m.status,
+      m.startDate.toISOString().slice(0, 10),
+      m.endDate.toISOString().slice(0, 10),
+      m.paymentStatus ?? '',
+      m.createdAt.toISOString().slice(0, 10),
+    ]);
+
+    const csv =
+      headers.map(escape).join(',') +
+      '\n' +
+      rows.map((row) => row.map(escape).join(',')).join('\n');
+
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', 'attachment; filename="members-export.csv"');
+    res.send(csv);
+  } catch (error: any) {
+    console.error('Error exporting members:', error);
     res.status(500).json({ error: error.message || 'Internal server error' });
   }
 });
