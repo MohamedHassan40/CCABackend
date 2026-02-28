@@ -288,7 +288,7 @@ router.put('/:id', requirePermission('hr.payroll.edit'), async (req, res) => {
         id,
         orgId: req.org.id,
       },
-      include: { employee: { select: { userId: true } } },
+      include: { employee: { select: { id: true, userId: true } } },
     });
 
     if (!payrollRecord) {
