@@ -255,6 +255,66 @@ async function main() {
     },
   });
 
+  const documentsManagerRole = await prisma.role.upsert({
+    where: { key: 'documents.manager' },
+    update: {},
+    create: {
+      key: 'documents.manager',
+      name: 'Document Manager',
+      description: 'Full access to document library, folders, and sharing',
+    },
+  });
+
+  const documentsViewerRole = await prisma.role.upsert({
+    where: { key: 'documents.viewer' },
+    update: {},
+    create: {
+      key: 'documents.viewer',
+      name: 'Document Viewer',
+      description: 'Read-only access to documents and folders',
+    },
+  });
+
+  const salesManagerRole = await prisma.role.upsert({
+    where: { key: 'sales.manager' },
+    update: {},
+    create: {
+      key: 'sales.manager',
+      name: 'Sales Manager',
+      description: 'Full access to CRM: leads, opportunities, contacts, accounts, quotes, activities',
+    },
+  });
+
+  const salesViewerRole = await prisma.role.upsert({
+    where: { key: 'sales.viewer' },
+    update: {},
+    create: {
+      key: 'sales.viewer',
+      name: 'Sales Viewer',
+      description: 'Read-only access to sales pipeline and CRM data',
+    },
+  });
+
+  const membershipManagerRole = await prisma.role.upsert({
+    where: { key: 'membership.manager' },
+    update: {},
+    create: {
+      key: 'membership.manager',
+      name: 'Membership Manager',
+      description: 'Full access to membership types, members, announcements, and messages',
+    },
+  });
+
+  const membershipViewerRole = await prisma.role.upsert({
+    where: { key: 'membership.viewer' },
+    update: {},
+    create: {
+      key: 'membership.viewer',
+      name: 'Membership Viewer',
+      description: 'Read-only access to members and announcements',
+    },
+  });
+
   console.log('✅ Created roles\n');
 
   // ============================================
@@ -494,21 +554,24 @@ async function main() {
   await assignModulePermissions(marketplaceManagerRole, 'marketplace.');
   await assignModulePermissions(inventoryManagerRole, 'inventory.');
   await assignModulePermissions(pmoManagerRole, 'pmo.');
+  await assignModulePermissions(documentsManagerRole, 'documents.');
+  await assignModulePermissions(salesManagerRole, 'sales.');
+  await assignModulePermissions(membershipManagerRole, 'membership.');
 
-  // View-only roles
-  const hrViewPerm = createdPermissions.find((p) => p.key === 'hr.employees.view');
-  if (hrViewPerm) {
+  // View-only roles: assign all *.view permissions per module to viewer roles
+  const hrViewPerms = createdPermissions.filter((p) => p.key.startsWith('hr.') && p.key.endsWith('.view'));
+  for (const perm of hrViewPerms) {
     await prisma.rolePermission.upsert({
       where: {
         roleId_permissionId: {
           roleId: hrViewerRole.id,
-          permissionId: hrViewPerm.id,
+          permissionId: perm.id,
         },
       },
       update: {},
       create: {
         roleId: hrViewerRole.id,
-        permissionId: hrViewPerm.id,
+        permissionId: perm.id,
       },
     });
   }
@@ -531,7 +594,7 @@ async function main() {
   }
 
   // Marketplace, Inventory, PMO viewers
-  const viewOnlyPerms = createdPermissions.filter((p) => 
+  const viewOnlyPerms = createdPermissions.filter((p) =>
     (p.key.startsWith('marketplace.') || p.key.startsWith('inventory.') || p.key.startsWith('pmo.')) && p.key.endsWith('.view')
   );
   for (const perm of viewOnlyPerms) {
@@ -539,7 +602,7 @@ async function main() {
     if (perm.key.startsWith('marketplace.')) roleId = marketplaceViewerRole.id;
     if (perm.key.startsWith('inventory.')) roleId = inventoryViewerRole.id;
     if (perm.key.startsWith('pmo.')) roleId = pmoViewerRole.id;
-    
+
     if (roleId) {
       await prisma.rolePermission.upsert({
         where: {
@@ -555,6 +618,64 @@ async function main() {
         },
       });
     }
+  }
+
+  // Documents viewer: documents.view + documents.*.view
+  const documentsViewPerms = createdPermissions.filter(
+    (p) => p.key.startsWith('documents.') && (p.key === 'documents.view' || p.key.endsWith('.view'))
+  );
+  for (const perm of documentsViewPerms) {
+    await prisma.rolePermission.upsert({
+      where: {
+        roleId_permissionId: {
+          roleId: documentsViewerRole.id,
+          permissionId: perm.id,
+        },
+      },
+      update: {},
+      create: {
+        roleId: documentsViewerRole.id,
+        permissionId: perm.id,
+      },
+    });
+  }
+
+  // Sales viewer: all sales.*.view
+  const salesViewPerms = createdPermissions.filter((p) => p.key.startsWith('sales.') && p.key.endsWith('.view'));
+  for (const perm of salesViewPerms) {
+    await prisma.rolePermission.upsert({
+      where: {
+        roleId_permissionId: {
+          roleId: salesViewerRole.id,
+          permissionId: perm.id,
+        },
+      },
+      update: {},
+      create: {
+        roleId: salesViewerRole.id,
+        permissionId: perm.id,
+      },
+    });
+  }
+
+  // Membership viewer: all membership.*.view
+  const membershipViewPerms = createdPermissions.filter(
+    (p) => p.key.startsWith('membership.') && p.key.endsWith('.view')
+  );
+  for (const perm of membershipViewPerms) {
+    await prisma.rolePermission.upsert({
+      where: {
+        roleId_permissionId: {
+          roleId: membershipViewerRole.id,
+          permissionId: perm.id,
+        },
+      },
+      update: {},
+      create: {
+        roleId: membershipViewerRole.id,
+        permissionId: perm.id,
+      },
+    });
   }
 
   console.log('✅ Assigned permissions to roles\n');
