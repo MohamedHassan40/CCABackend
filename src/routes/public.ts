@@ -572,6 +572,53 @@ router.post('/tickets/:orgSlug', async (req: Request, res: Response) => {
   }
 });
 
+// ============================================
+// PUBLIC MEMBERSHIP VERIFICATION (QR code scan)
+// ============================================
+
+// GET /api/public/membership/verify/:token - Verify membership by QR token (no auth)
+router.get('/membership/verify/:token', async (req: Request, res: Response) => {
+  try {
+    const { token } = req.params;
+    if (!token) {
+      res.status(400).json({ valid: false, error: 'Token is required' });
+      return;
+    }
+
+    const membership = await prisma.memberMembership.findFirst({
+      where: { qrToken: token },
+      include: {
+        membershipType: true,
+        organization: { select: { id: true, name: true, slug: true } },
+      },
+    });
+
+    if (!membership) {
+      res.status(404).json({ valid: false, error: 'Membership not found' });
+      return;
+    }
+
+    const now = new Date();
+    const isActive = membership.status === 'active' && membership.endDate >= now;
+
+    res.json({
+      valid: isActive,
+      membership: {
+        memberName: membership.memberName,
+        memberEmail: membership.memberEmail,
+        membershipTypeName: membership.membershipType.name,
+        startDate: membership.startDate,
+        endDate: membership.endDate,
+        status: membership.status,
+      },
+      organization: membership.organization,
+    });
+  } catch (error) {
+    console.error('Error verifying membership:', error);
+    res.status(500).json({ valid: false, error: 'Internal server error' });
+  }
+});
+
 // GET /api/public/tickets/:orgSlug/track?ticketId=xxx&email=xxx - Track ticket (public)
 router.get('/tickets/:orgSlug/track', async (req: Request, res: Response) => {
   try {

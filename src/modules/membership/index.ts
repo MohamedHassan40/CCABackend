@@ -1,4 +1,6 @@
 import { Router, Request, Response } from 'express';
+import crypto from 'crypto';
+import QRCode from 'qrcode';
 import prisma from '../../core/db';
 import { authMiddleware } from '../../middleware/auth';
 import { requireModuleEnabled } from '../../middleware/modules';
@@ -7,6 +9,12 @@ import { moduleRegistry } from '../../core/modules/registry';
 import type { ModuleManifest } from '@cloud-org/shared';
 
 const router = Router();
+
+const frontendUrl = () => process.env.FRONTEND_URL || process.env.CLIENT_URL || 'http://localhost:3000';
+
+function generateQrToken(): string {
+  return crypto.randomBytes(12).toString('base64url');
+}
 
 // Module manifest
 export const membershipManifest: ModuleManifest = {
@@ -33,6 +41,11 @@ export const membershipManifest: ModuleManifest = {
       path: '/membership/messages',
       label: 'Messages',
       permission: 'membership.messages.view',
+    },
+    {
+      path: '/membership/card-designs',
+      label: 'Card Designs',
+      permission: 'membership.types.view',
     },
   ],
   dashboardWidgets: [
@@ -259,6 +272,158 @@ router.delete('/types/:id', requirePermission('membership.types.delete'), async 
 });
 
 // ============================================
+// CARD DESIGNS (digital card & QR customization)
+// ============================================
+
+// GET /api/membership/card-designs - List card designs
+router.get('/card-designs', requirePermission('membership.types.view'), async (req: Request, res: Response) => {
+  try {
+    if (!req.org) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+    const designs = await prisma.membershipCardDesign.findMany({
+      where: { orgId: req.org.id },
+      orderBy: [{ isDefault: 'desc' }, { name: 'asc' }],
+    });
+    res.json(designs);
+  } catch (error: any) {
+    console.error('Error fetching card designs:', error);
+    res.status(500).json({ error: error.message || 'Internal server error' });
+  }
+});
+
+// GET /api/membership/card-designs/:id - Get one design
+router.get('/card-designs/:id', requirePermission('membership.types.view'), async (req: Request, res: Response) => {
+  try {
+    if (!req.org) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+    const design = await prisma.membershipCardDesign.findFirst({
+      where: { id: req.params.id, orgId: req.org.id },
+    });
+    if (!design) {
+      res.status(404).json({ error: 'Card design not found' });
+      return;
+    }
+    res.json(design);
+  } catch (error: any) {
+    console.error('Error fetching card design:', error);
+    res.status(500).json({ error: error.message || 'Internal server error' });
+  }
+});
+
+// POST /api/membership/card-designs - Create design
+router.post('/card-designs', requirePermission('membership.types.create'), async (req: Request, res: Response) => {
+  try {
+    if (!req.org) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+    const { name, isDefault, layout, primaryColor, secondaryColor, accentColor, logoUrl, showQR, qrPosition, customCss, fontFamily } = req.body;
+    if (!name) {
+      res.status(400).json({ error: 'Name is required' });
+      return;
+    }
+    if (isDefault === true) {
+      await prisma.membershipCardDesign.updateMany({
+        where: { orgId: req.org.id },
+        data: { isDefault: false },
+      });
+    }
+    const design = await prisma.membershipCardDesign.create({
+      data: {
+        orgId: req.org.id,
+        name: name,
+        isDefault: isDefault === true,
+        layout: layout || 'standard',
+        primaryColor: primaryColor || '#1e3a5f',
+        secondaryColor: secondaryColor || '#3b82f6',
+        accentColor: accentColor || null,
+        logoUrl: logoUrl || null,
+        showQR: showQR !== false,
+        qrPosition: qrPosition || 'right',
+        customCss: customCss || null,
+        fontFamily: fontFamily || 'sans-serif',
+      },
+    });
+    res.status(201).json(design);
+  } catch (error: any) {
+    console.error('Error creating card design:', error);
+    res.status(500).json({ error: error.message || 'Internal server error' });
+  }
+});
+
+// PUT /api/membership/card-designs/:id - Update design
+router.put('/card-designs/:id', requirePermission('membership.types.edit'), async (req: Request, res: Response) => {
+  try {
+    if (!req.org) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+    const { id } = req.params;
+    const design = await prisma.membershipCardDesign.findFirst({
+      where: { id, orgId: req.org.id },
+    });
+    if (!design) {
+      res.status(404).json({ error: 'Card design not found' });
+      return;
+    }
+    const { name, isDefault, layout, primaryColor, secondaryColor, accentColor, logoUrl, showQR, qrPosition, customCss, fontFamily } = req.body;
+    if (isDefault === true) {
+      await prisma.membershipCardDesign.updateMany({
+        where: { orgId: req.org.id },
+        data: { isDefault: false },
+      });
+    }
+    const updated = await prisma.membershipCardDesign.update({
+      where: { id },
+      data: {
+        ...(name !== undefined && { name }),
+        ...(isDefault !== undefined && { isDefault }),
+        ...(layout !== undefined && { layout }),
+        ...(primaryColor !== undefined && { primaryColor }),
+        ...(secondaryColor !== undefined && { secondaryColor }),
+        ...(accentColor !== undefined && { accentColor }),
+        ...(logoUrl !== undefined && { logoUrl }),
+        ...(showQR !== undefined && { showQR }),
+        ...(qrPosition !== undefined && { qrPosition }),
+        ...(customCss !== undefined && { customCss }),
+        ...(fontFamily !== undefined && { fontFamily }),
+      },
+    });
+    res.json(updated);
+  } catch (error: any) {
+    console.error('Error updating card design:', error);
+    res.status(500).json({ error: error.message || 'Internal server error' });
+  }
+});
+
+// DELETE /api/membership/card-designs/:id - Delete design
+router.delete('/card-designs/:id', requirePermission('membership.types.delete'), async (req: Request, res: Response) => {
+  try {
+    if (!req.org) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+    const { id } = req.params;
+    const design = await prisma.membershipCardDesign.findFirst({
+      where: { id, orgId: req.org.id },
+    });
+    if (!design) {
+      res.status(404).json({ error: 'Card design not found' });
+      return;
+    }
+    await prisma.membershipCardDesign.delete({ where: { id } });
+    res.json({ message: 'Card design deleted successfully' });
+  } catch (error: any) {
+    console.error('Error deleting card design:', error);
+    res.status(500).json({ error: error.message || 'Internal server error' });
+  }
+});
+
+// ============================================
 // MEMBERSHIPS
 // ============================================
 
@@ -296,6 +461,7 @@ router.get('/members', requirePermission('membership.members.view'), async (req:
       where,
       include: {
         membershipType: true,
+        cardDesign: true,
         createdBy: {
           select: { id: true, name: true, email: true },
         },
@@ -341,6 +507,7 @@ router.get('/members/:id', requirePermission('membership.members.view'), async (
       },
       include: {
         membershipType: true,
+        cardDesign: true,
         createdBy: {
           select: { id: true, name: true, email: true },
         },
@@ -367,7 +534,7 @@ router.post('/members', requirePermission('membership.members.create'), async (r
       return;
     }
 
-    const { membershipTypeId, memberName, memberEmail, memberPhone, memberAddress, memberCity, memberCountry, startDate, endDate, paymentStatus, paymentAmount, paymentMethod, notes } = req.body;
+    const { membershipTypeId, memberName, memberEmail, memberPhone, memberAddress, memberCity, memberCountry, startDate, endDate, paymentStatus, paymentAmount, paymentMethod, notes, cardDesignId } = req.body;
 
     if (!membershipTypeId || !memberName || !memberEmail) {
       res.status(400).json({ error: 'Membership type, member name, and email are required' });
@@ -404,9 +571,12 @@ router.post('/members', requirePermission('membership.members.create'), async (r
         paymentMethod: paymentMethod || null,
         notes: notes || null,
         createdById: req.user.id,
+        qrToken: generateQrToken(),
+        cardDesignId: cardDesignId || null,
       },
       include: {
         membershipType: true,
+        cardDesign: true,
       },
     });
 
@@ -454,12 +624,145 @@ router.put('/members/:id', requirePermission('membership.members.edit'), async (
       data: updateData,
       include: {
         membershipType: true,
+        cardDesign: true,
       },
     });
 
     res.json(updated);
   } catch (error: any) {
     console.error('Error updating membership:', error);
+    res.status(500).json({ error: error.message || 'Internal server error' });
+  }
+});
+
+// GET /api/membership/members/:id/card - Get membership + design for digital card rendering
+router.get('/members/:id/card', requirePermission('membership.members.view'), async (req: Request, res: Response) => {
+  try {
+    if (!req.org) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+    const { id } = req.params;
+
+    const membership = await prisma.memberMembership.findFirst({
+      where: { id, orgId: req.org.id },
+      include: {
+        membershipType: true,
+        cardDesign: true,
+        organization: { select: { name: true, slug: true } },
+      },
+    });
+
+    if (!membership) {
+      res.status(404).json({ error: 'Membership not found' });
+      return;
+    }
+
+    // Ensure QR token exists (for members created before this feature)
+    let qrToken = membership.qrToken;
+    if (!qrToken) {
+      qrToken = generateQrToken();
+      await prisma.memberMembership.update({
+        where: { id: membership.id },
+        data: { qrToken },
+      });
+    }
+
+    // If no design assigned, use org default or a built-in default
+    let design = membership.cardDesign;
+    if (!design) {
+      design = await prisma.membershipCardDesign.findFirst({
+        where: { orgId: req.org.id, isDefault: true },
+      });
+    }
+    if (!design) {
+      design = await prisma.membershipCardDesign.findFirst({
+        where: { orgId: req.org.id },
+      });
+    }
+
+    res.json({
+      membership: {
+        id: membership.id,
+        memberName: membership.memberName,
+        memberEmail: membership.memberEmail,
+        memberPhone: membership.memberPhone,
+        status: membership.status,
+        startDate: membership.startDate,
+        endDate: membership.endDate,
+        qrToken,
+        membershipType: membership.membershipType,
+        organization: membership.organization,
+      },
+      design: design
+        ? {
+            id: design.id,
+            name: design.name,
+            layout: design.layout,
+            primaryColor: design.primaryColor,
+            secondaryColor: design.secondaryColor,
+            accentColor: design.accentColor,
+            logoUrl: design.logoUrl,
+            showQR: design.showQR,
+            qrPosition: design.qrPosition,
+            customCss: design.customCss,
+            fontFamily: design.fontFamily,
+          }
+        : {
+            name: 'Default',
+            layout: 'standard',
+            primaryColor: '#1e3a5f',
+            secondaryColor: '#3b82f6',
+            accentColor: null,
+            logoUrl: null,
+            showQR: true,
+            qrPosition: 'right',
+            customCss: null,
+            fontFamily: 'sans-serif',
+          },
+      verifyUrl: qrToken ? `${frontendUrl()}/membership/verify/${qrToken}` : null,
+    });
+  } catch (error: any) {
+    console.error('Error fetching membership card:', error);
+    res.status(500).json({ error: error.message || 'Internal server error' });
+  }
+});
+
+// GET /api/membership/members/:id/qr - Get QR code image (PNG) for membership verification
+router.get('/members/:id/qr', requirePermission('membership.members.view'), async (req: Request, res: Response) => {
+  try {
+    if (!req.org) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+    const { id } = req.params;
+
+    let membership = await prisma.memberMembership.findFirst({
+      where: { id, orgId: req.org.id },
+      select: { id: true, qrToken: true },
+    });
+
+    if (!membership) {
+      res.status(404).json({ error: 'Membership not found' });
+      return;
+    }
+
+    let qrToken = membership.qrToken;
+    if (!qrToken) {
+      qrToken = generateQrToken();
+      await prisma.memberMembership.update({
+        where: { id: membership.id },
+        data: { qrToken },
+      });
+    }
+
+    const verifyUrl = `${frontendUrl()}/membership/verify/${qrToken}`;
+    const pngBuffer = await QRCode.toBuffer(verifyUrl, { type: 'png', width: 256, margin: 2 });
+
+    res.set('Content-Type', 'image/png');
+    res.send(pngBuffer);
+  } catch (error: any) {
+    console.error('Error generating QR code:', error);
     res.status(500).json({ error: error.message || 'Internal server error' });
   }
 });

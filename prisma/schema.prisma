@@ -124,13 +124,14 @@ model Organization {
   opportunities       Opportunity[]
   quotes              Quote[]
   salesActivities     SalesActivity[]
-  membershipTypes     MembershipType[]
-  memberMemberships   MemberMembership[]
-  announcements       Announcement[]
-  conversations       Conversation[]
-  tasks               Task[]
-  taskTrackers        TaskTracker[]
-  calendarEvents      CalendarEvent[]
+  membershipTypes       MembershipType[]
+  memberMemberships     MemberMembership[]
+  membershipCardDesigns MembershipCardDesign[]
+  announcements         Announcement[]
+  conversations         Conversation[]
+  tasks                 Task[]
+  taskTrackers          TaskTracker[]
+  calendarEvents        CalendarEvent[]
   absenceDeductionDecisions AbsenceDeductionDecision[]
 
   @@index([status])
@@ -1878,11 +1879,14 @@ model MemberMembership {
   paymentMethod    String? // "cash", "card", "bank_transfer", etc.
   notes            String?
   createdById      String // User who created this membership
+  qrToken          String?   @unique // Unique token for QR code verification URL
+  cardDesignId     String? // Optional: which card design template to use for this member
 
-  organization   Organization   @relation(fields: [orgId], references: [id], onDelete: Cascade)
-  membershipType MembershipType @relation(fields: [membershipTypeId], references: [id], onDelete: Cascade)
-  createdBy      User           @relation("MembershipCreatedBy", fields: [createdById], references: [id], onDelete: Cascade)
-  conversations  Conversation[] @relation("MemberConversations")
+  organization   Organization         @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  membershipType MembershipType       @relation(fields: [membershipTypeId], references: [id], onDelete: Cascade)
+  cardDesign     MembershipCardDesign? @relation(fields: [cardDesignId], references: [id], onDelete: SetNull)
+  createdBy      User                 @relation("MembershipCreatedBy", fields: [createdById], references: [id], onDelete: Cascade)
+  conversations  Conversation[]       @relation("MemberConversations")
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -1892,6 +1896,33 @@ model MemberMembership {
   @@index([status])
   @@index([memberEmail])
   @@index([endDate])
+  @@index([qrToken])
+}
+
+// Customizable designs for digital membership cards and QR display
+model MembershipCardDesign {
+  id          String   @id @default(cuid())
+  orgId       String
+  name        String   // e.g. "Standard", "Premium", "Minimal"
+  isDefault   Boolean  @default(false) // One design per org can be default for new members
+  layout      String   @default("standard") // "standard", "minimal", "compact", "premium"
+  primaryColor   String @default("#1e3a5f") // Hex
+  secondaryColor String @default("#3b82f6") // Hex
+  accentColor    String? // Optional third color
+  logoUrl     String? // Optional org/membership logo URL
+  showQR      Boolean  @default(true) // Whether to show QR on the card
+  qrPosition  String   @default("right") // "right", "left", "bottom", "center"
+  customCss   String? // Optional CSS overrides (sanitized on use)
+  fontFamily  String?  @default("sans-serif") // e.g. "Inter", "sans-serif"
+
+  organization Organization       @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  memberships  MemberMembership[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([orgId])
+  @@index([isDefault])
 }
 
 model Announcement {
