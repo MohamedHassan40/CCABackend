@@ -1,7 +1,7 @@
 import { Router, Request, Response } from 'express';
 import prisma from '../core/db';
 import { authMiddleware } from '../middleware/auth';
-import { requirePermission } from '../middleware/permissions';
+import { requirePermission, requireSuperAdmin } from '../middleware/permissions';
 import { hashPassword } from '../core/auth/password';
 
 const router = Router();
@@ -451,6 +451,71 @@ router.get('/roles', authMiddleware, async (req: Request, res: Response) => {
   }
 });
 
+// GET /api/users/permissions/grouped - Get all permissions grouped by module
+router.get('/permissions/grouped', authMiddleware, async (req: Request, res: Response) => {
+  try {
+    const permissions = await prisma.permission.findMany({
+      orderBy: { key: 'asc' },
+    });
+    const modules = await prisma.module.findMany({
+      where: { isActive: true },
+      orderBy: { name: 'asc' },
+    });
+
+    const moduleKeys = new Set(modules.map((m) => m.key));
+    const grouped: Array<{
+      moduleKey: string;
+      moduleName: string;
+      permissions: Array<{ id: string; key: string; name: string; description: string | null }>;
+    }> = [];
+    const globalPerms: Array<{ id: string; key: string; name: string; description: string | null }> = [];
+
+    for (const p of permissions) {
+      const part = p.key.split('.')[0];
+      if (part === 'users' || part === 'organizations') {
+        globalPerms.push({
+          id: p.id,
+          key: p.key,
+          name: p.name,
+          description: p.description,
+        });
+      } else if (moduleKeys.has(part)) {
+        let group = grouped.find((g) => g.moduleKey === part);
+        if (!group) {
+          const mod = modules.find((m) => m.key === part);
+          group = {
+            moduleKey: part,
+            moduleName: mod?.name ?? part,
+            permissions: [],
+          };
+          grouped.push(group);
+        }
+        group.permissions.push({
+          id: p.id,
+          key: p.key,
+          name: p.name,
+          description: p.description,
+        });
+      } else {
+        globalPerms.push({
+          id: p.id,
+          key: p.key,
+          name: p.name,
+          description: p.description,
+        });
+      }
+    }
+
+    res.json({
+      global: globalPerms,
+      modules: grouped,
+    });
+  } catch (error) {
+    console.error('Error fetching permissions grouped:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 // GET /api/users/permissions - Get all permissions
 router.get('/permissions', authMiddleware, async (req: Request, res: Response) => {
   try {
@@ -506,6 +571,63 @@ router.get('/roles/:roleId/permissions', authMiddleware, async (req: Request, re
     res.status(500).json({ error: 'Internal server error' });
   }
 });
+
+// PUT /api/users/roles/:roleId/permissions - Set permissions for a role (super admin only)
+router.put(
+  '/roles/:roleId/permissions',
+  authMiddleware,
+  requireSuperAdmin,
+  async (req: Request, res: Response) => {
+    try {
+      const { roleId } = req.params;
+      const { permissionIds } = req.body as { permissionIds: string[] };
+
+      if (!Array.isArray(permissionIds)) {
+        res.status(400).json({ error: 'permissionIds must be an array' });
+        return;
+      }
+
+      const role = await prisma.role.findUnique({ where: { id: roleId } });
+      if (!role) {
+        res.status(404).json({ error: 'Role not found' });
+        return;
+      }
+
+      await prisma.$transaction([
+        prisma.rolePermission.deleteMany({ where: { roleId } }),
+        ...(permissionIds.length > 0
+          ? [
+              prisma.rolePermission.createMany({
+                data: permissionIds.map((permissionId: string) => ({
+                  roleId,
+                  permissionId,
+                })),
+                skipDuplicates: true,
+              }),
+            ]
+          : []),
+      ]);
+
+      const updated = await prisma.role.findUnique({
+        where: { id: roleId },
+        include: {
+          rolePermissions: { include: { permission: true } },
+        },
+      });
+      res.json(
+        updated?.rolePermissions.map((rp) => ({
+          id: rp.permission.id,
+          key: rp.permission.key,
+          name: rp.permission.name,
+          description: rp.permission.description,
+        })) ?? []
+      );
+    } catch (error) {
+      console.error('Error updating role permissions:', error);
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  }
+);
 
 export default router;
 
