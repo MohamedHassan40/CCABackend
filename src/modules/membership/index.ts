@@ -6,6 +6,8 @@ import { authMiddleware } from '../../middleware/auth';
 import { requireModuleEnabled } from '../../middleware/modules';
 import { requirePermission } from '../../middleware/permissions';
 import { moduleRegistry } from '../../core/modules/registry';
+import { createAuditLog } from '../../middleware/audit';
+import { createNotificationForOrgWithPermission } from '../../core/notifications/helper';
 import type { ModuleManifest } from '@cloud-org/shared';
 
 const router = Router();
@@ -435,7 +437,11 @@ router.get('/members', requirePermission('membership.members.view'), async (req:
       return;
     }
 
-    const { status, membershipTypeId, search, expired, expiringWithinDays } = req.query;
+    const { status, membershipTypeId, search, expired, expiringWithinDays, limit: qLimit, offset: qOffset, page } = req.query;
+    const limit = Math.min(parseInt(String(qLimit || 50), 10) || 50, 200);
+    const offset = parseInt(String(qOffset || 0), 10) || 0;
+    const pageNum = parseInt(String(page), 10);
+    const skip = pageNum >= 1 ? (pageNum - 1) * limit : offset;
 
     const where: any = {
       orgId: req.org.id,
@@ -466,21 +472,26 @@ router.get('/members', requirePermission('membership.members.view'), async (req:
       ];
     }
 
-    const memberships = await prisma.memberMembership.findMany({
-      where,
-      include: {
-        membershipType: true,
-        cardDesign: true,
-        createdBy: {
-          select: { id: true, name: true, email: true },
+    const [memberships, total] = await Promise.all([
+      prisma.memberMembership.findMany({
+        where,
+        include: {
+          membershipType: true,
+          cardDesign: true,
+          createdBy: {
+            select: { id: true, name: true, email: true },
+          },
         },
-      },
-      orderBy: {
-        createdAt: 'desc',
-      },
-    });
+        orderBy: {
+          createdAt: 'desc',
+        },
+        take: limit,
+        skip,
+      }),
+      prisma.memberMembership.count({ where }),
+    ]);
 
-    // Auto-update expired memberships
+    // Auto-update expired memberships in this page
     const now = new Date();
     for (const membership of memberships) {
       if (membership.status === 'active' && membership.endDate < now) {
@@ -492,7 +503,7 @@ router.get('/members', requirePermission('membership.members.view'), async (req:
       }
     }
 
-    res.json(memberships);
+    res.json({ data: memberships, total, limit, offset: skip });
   } catch (error: any) {
     console.error('Error fetching memberships:', error);
     res.status(500).json({ error: error.message || 'Internal server error' });
@@ -913,9 +924,157 @@ router.delete('/members/:id', requirePermission('membership.members.delete'), as
       where: { id },
     });
 
+    createAuditLog({
+      userId: (req as any).user?.id ?? null,
+      organizationId: req.org.id,
+      action: 'delete',
+      resourceType: 'member_membership',
+      resourceId: id,
+      details: { memberMembershipId: id },
+      req,
+    }).catch(() => {});
+
     res.json({ message: 'Membership deleted successfully' });
   } catch (error: any) {
     console.error('Error deleting membership:', error);
+    res.status(500).json({ error: error.message || 'Internal server error' });
+  }
+});
+
+// POST /api/membership/members/bulk - Bulk create members from CSV-like payload
+router.post('/members/bulk', requirePermission('membership.members.create'), async (req: Request, res: Response) => {
+  try {
+    if (!req.org || !req.user) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+
+    const { members } = req.body;
+    if (!Array.isArray(members) || members.length === 0) {
+      res.status(400).json({ error: 'Members array is required' });
+      return;
+    }
+
+    const results = { created: 0, failed: 0, errors: [] as Array<{ row: number; error: string }> };
+
+    for (let i = 0; i < members.length; i++) {
+      const m = members[i];
+      try {
+        if (!m.memberName || !m.memberEmail) {
+          results.failed++;
+          results.errors.push({ row: i + 1, error: 'Member name and email are required' });
+          continue;
+        }
+        const membershipTypeId = m.membershipTypeId || m.membershipType;
+        if (!membershipTypeId) {
+          results.failed++;
+          results.errors.push({ row: i + 1, error: 'Membership type is required' });
+          continue;
+        }
+
+        const membershipType = await prisma.membershipType.findFirst({
+          where: { id: membershipTypeId, orgId: req.org.id },
+        });
+        if (!membershipType) {
+          results.failed++;
+          results.errors.push({ row: i + 1, error: 'Membership type not found' });
+          continue;
+        }
+
+        const start = m.startDate ? new Date(m.startDate) : new Date();
+        const end = m.endDate ? new Date(m.endDate) : new Date(start.getTime() + membershipType.durationMonths * 30 * 24 * 60 * 60 * 1000);
+
+        await prisma.memberMembership.create({
+          data: {
+            orgId: req.org.id,
+            membershipTypeId: membershipType.id,
+            memberName: m.memberName,
+            memberEmail: m.memberEmail,
+            memberPhone: m.memberPhone || null,
+            memberAddress: m.memberAddress || null,
+            memberCity: m.memberCity || null,
+            memberCountry: m.memberCountry || null,
+            startDate: start,
+            endDate: end,
+            paymentStatus: m.paymentStatus || 'paid',
+            paymentAmount: m.paymentAmount != null ? Math.round(Number(m.paymentAmount) * 100) : null,
+            paymentMethod: m.paymentMethod || null,
+            notes: m.notes || null,
+            createdById: req.user.id,
+            qrToken: generateQrToken(),
+            cardDesignId: m.cardDesignId || null,
+          },
+        });
+        results.created++;
+      } catch (err: any) {
+        results.failed++;
+        results.errors.push({ row: i + 1, error: err.message || 'Failed to create member' });
+      }
+    }
+
+    res.json({ success: true, ...results });
+  } catch (error: any) {
+    console.error('Error bulk creating members:', error);
+    res.status(500).json({ error: error.message || 'Internal server error' });
+  }
+});
+
+// POST /api/membership/jobs/renewal-reminders - Create notifications for members expiring in 7/30 days
+router.post('/jobs/renewal-reminders', requirePermission('membership.members.view'), async (req: Request, res: Response) => {
+  try {
+    if (!req.org) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+
+    const now = new Date();
+    const in7 = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+    const in30 = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
+
+    const expiringIn7 = await prisma.memberMembership.findMany({
+      where: {
+        orgId: req.org.id,
+        status: 'active',
+        endDate: { gte: now, lte: in7 },
+      },
+      include: { membershipType: { select: { name: true } } },
+      orderBy: { endDate: 'asc' },
+    });
+
+    const expiringIn30 = await prisma.memberMembership.findMany({
+      where: {
+        orgId: req.org.id,
+        status: 'active',
+        endDate: { gt: in7, lte: in30 },
+      },
+      include: { membershipType: { select: { name: true } } },
+      orderBy: { endDate: 'asc' },
+    });
+
+    const parts: string[] = [];
+    if (expiringIn7.length > 0) {
+      parts.push(`${expiringIn7.length} expiring in 7 days: ${expiringIn7.map((x) => x.memberName).join(', ')}`);
+    }
+    if (expiringIn30.length > 0) {
+      parts.push(`${expiringIn30.length} expiring in 30 days: ${expiringIn30.map((x) => x.memberName).join(', ')}`);
+    }
+
+    if (parts.length > 0) {
+      createNotificationForOrgWithPermission(req.org.id, 'membership.members.view', {
+        type: 'warning',
+        title: 'Membership renewal reminders',
+        message: parts.join('. '),
+        link: '/dashboard/membership/members',
+      }).catch(() => {});
+    }
+
+    res.json({
+      message: 'Renewal reminders processed',
+      expiringIn7Days: expiringIn7.length,
+      expiringIn30Days: expiringIn30.length,
+    });
+  } catch (error: any) {
+    console.error('Error running renewal reminders:', error);
     res.status(500).json({ error: error.message || 'Internal server error' });
   }
 });

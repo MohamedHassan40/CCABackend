@@ -4,6 +4,8 @@ import { authMiddleware } from '../../middleware/auth';
 import { requireModuleEnabled } from '../../middleware/modules';
 import { requirePermission } from '../../middleware/permissions';
 import { moduleRegistry } from '../../core/modules/registry';
+import { createNotification } from '../../core/notifications/helper';
+import { createAuditLog } from '../../middleware/audit';
 import type { ModuleManifest } from '@cloud-org/shared';
 
 const router = Router();
@@ -360,6 +362,17 @@ router.post('/tickets', requirePermission('ticketing.tickets.create'), async (re
 
     await recordTicketHistory(ticket.id, req.user.id, 'created');
 
+    if (ticket.assigneeId) {
+      createNotification({
+        userId: ticket.assigneeId,
+        organizationId: req.org!.id,
+        type: 'info',
+        title: 'New ticket assigned to you',
+        message: `Ticket: ${ticket.title}`,
+        link: `/dashboard/ticketing/tickets/${ticket.id}`,
+      }).catch(() => {});
+    }
+
     res.status(201).json(ticket);
   } catch (error) {
     console.error('Error creating ticket:', error);
@@ -487,6 +500,25 @@ router.put('/tickets/:id', requirePermission('ticketing.tickets.edit'), async (r
     }
     if (assigneeId !== undefined && assigneeId !== ticket.assigneeId) {
       await recordTicketHistory(id, req.user!.id, 'assignee_changed', 'assigneeId', ticket.assigneeId ?? '', assigneeId ?? '');
+      if (assigneeId) {
+        createNotification({
+          userId: assigneeId,
+          organizationId: req.org!.id,
+          type: 'info',
+          title: 'Ticket assigned to you',
+          message: `Ticket: ${updated.title}`,
+          link: `/dashboard/ticketing/tickets/${id}`,
+        }).catch(() => {});
+      }
+      createAuditLog({
+        userId: req.user!.id,
+        organizationId: req.org!.id,
+        action: 'assign',
+        resourceType: 'ticket',
+        resourceId: id,
+        details: { ticketId: id, previousAssigneeId: ticket.assigneeId, newAssigneeId: assigneeId || null },
+        req,
+      }).catch(() => {});
     }
     if (categoryId !== undefined && categoryId !== ticket.categoryId) {
       await recordTicketHistory(id, req.user!.id, 'category_changed', 'categoryId', ticket.categoryId ?? '', categoryId ?? '');
@@ -684,6 +716,7 @@ router.post('/tickets/:id/comments', requirePermission('ticketing.tickets.edit')
         id,
         orgId: req.org.id,
       },
+      select: { createdById: true, assigneeId: true, firstResponseAt: true, title: true },
     });
 
     if (!ticket) {
@@ -717,6 +750,21 @@ router.post('/tickets/:id/comments', requirePermission('ticketing.tickets.edit')
       where: { id },
       data: updateData,
     });
+
+    // Notify assignee and creator (exclude comment author)
+    const toNotify = [ticket.assigneeId, ticket.createdById].filter(Boolean) as string[];
+    const exclude = req.user!.id;
+    for (const userId of toNotify) {
+      if (userId === exclude) continue;
+      createNotification({
+        userId,
+        organizationId: req.org!.id,
+        type: 'info',
+        title: 'New reply on ticket',
+        message: `${ticket.title}: new ${isInternal === true ? 'internal note' : 'comment'}`,
+        link: `/dashboard/ticketing/tickets/${id}`,
+      }).catch(() => {});
+    }
 
     res.status(201).json(comment);
   } catch (error) {

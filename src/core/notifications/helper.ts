@@ -32,29 +32,60 @@ export async function createNotificationForOrg(
   params: Omit<CreateNotificationParams, 'userId' | 'organizationId'>
 ): Promise<void> {
   try {
-    // Get all active members of the organization
     const memberships = await prisma.membership.findMany({
-      where: {
-        organizationId,
-        isActive: true,
-      },
-      select: {
-        userId: true,
-      },
+      where: { organizationId, isActive: true },
+      select: { userId: true },
     });
-
-    // Create notification for each member
     await Promise.all(
-      memberships.map((membership) =>
-        createNotification({
-          ...params,
-          userId: membership.userId,
-          organizationId,
-        })
+      memberships.map((m) =>
+        createNotification({ ...params, userId: m.userId, organizationId })
       )
     );
   } catch (error) {
     console.error('Error creating org notifications:', error);
+  }
+}
+
+/** Get user IDs in org that have a given permission (via any of their roles). */
+export async function getOrgUserIdsWithPermission(
+  organizationId: string,
+  permissionKey: string
+): Promise<string[]> {
+  const perm = await prisma.permission.findFirst({
+    where: { key: permissionKey },
+    select: { id: true },
+  });
+  if (!perm) return [];
+  const roleIds = await prisma.rolePermission.findMany({
+    where: { permissionId: perm.id },
+    select: { roleId: true },
+  }).then((r) => r.map((x) => x.roleId));
+  if (roleIds.length === 0) return [];
+  const memberships = await prisma.membershipRole.findMany({
+    where: {
+      membership: { organizationId, isActive: true },
+      roleId: { in: roleIds },
+    },
+    select: { membership: { select: { userId: true } } },
+  });
+  return [...new Set(memberships.map((m) => m.membership.userId))];
+}
+
+/** Notify all org users who have the given permission. */
+export async function createNotificationForOrgWithPermission(
+  organizationId: string,
+  permissionKey: string,
+  params: Omit<CreateNotificationParams, 'userId' | 'organizationId'>
+): Promise<void> {
+  try {
+    const userIds = await getOrgUserIdsWithPermission(organizationId, permissionKey);
+    await Promise.all(
+      userIds.map((userId) =>
+        createNotification({ ...params, userId, organizationId })
+      )
+    );
+  } catch (error) {
+    console.error('Error creating permission-based notifications:', error);
   }
 }
 

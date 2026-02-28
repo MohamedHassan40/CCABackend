@@ -1,6 +1,8 @@
 import { Router } from 'express';
 import prisma from '../../core/db';
 import { requirePermission } from '../../middleware/permissions';
+import { createNotification } from '../../core/notifications/helper';
+import { createAuditLog } from '../../middleware/audit';
 
 const router = Router();
 
@@ -185,6 +187,7 @@ router.post('/', requirePermission('hr.payroll.create'), async (req, res) => {
       deductions,
       taxAmount,
       currency,
+      payslipUrl,
     } = req.body;
 
     if (!employeeId || !payPeriodStart || !payPeriodEnd || baseSalary === undefined) {
@@ -249,6 +252,7 @@ router.post('/', requirePermission('hr.payroll.create'), async (req, res) => {
         netSalary,
         currency: 'SAR',
         status: 'draft',
+        ...(payslipUrl !== undefined && payslipUrl !== null && payslipUrl !== '' && { payslipUrl: String(payslipUrl) }),
       },
       include: {
         employee: {
@@ -284,6 +288,7 @@ router.put('/:id', requirePermission('hr.payroll.edit'), async (req, res) => {
         id,
         orgId: req.org.id,
       },
+      include: { employee: { select: { userId: true } } },
     });
 
     if (!payrollRecord) {
@@ -321,6 +326,28 @@ router.put('/:id', requirePermission('hr.payroll.edit'), async (req, res) => {
       },
     });
 
+    if (status === 'paid' && !payrollRecord.paidAt && payrollRecord.employee.userId) {
+      createNotification({
+        userId: payrollRecord.employee.userId,
+        organizationId: req.org!.id,
+        type: 'success',
+        title: 'Payroll paid',
+        message: 'Your payroll has been marked as paid.',
+        link: '/dashboard/hr/payroll',
+      }).catch(() => {});
+    }
+    if (status === 'paid' && !payrollRecord.paidAt) {
+      createAuditLog({
+        userId: req.user?.id ?? null,
+        organizationId: req.org!.id,
+        action: 'mark_paid',
+        resourceType: 'payroll_record',
+        resourceId: id,
+        details: { payrollRecordId: id, employeeId: payrollRecord.employee.id },
+        req,
+      }).catch(() => {});
+    }
+
     res.json(updated);
   } catch (error) {
     console.error('Error updating payroll record:', error);
@@ -344,6 +371,7 @@ router.put('/:id/approve', requirePermission('hr.payroll.approve'), async (req, 
         orgId: req.org.id,
         status: 'draft',
       },
+      include: { employee: { select: { id: true, fullName: true, email: true, userId: true } } },
     });
 
     if (!payrollRecord) {
@@ -366,6 +394,27 @@ router.put('/:id/approve', requirePermission('hr.payroll.approve'), async (req, 
         },
       },
     });
+
+    if (payrollRecord.employee.userId) {
+      createNotification({
+        userId: payrollRecord.employee.userId,
+        organizationId: req.org.id,
+        type: 'info',
+        title: 'Payroll approved',
+        message: 'Your payroll record has been approved.',
+        link: '/dashboard/hr/payroll',
+      }).catch(() => {});
+    }
+
+    createAuditLog({
+      userId: req.user?.id ?? null,
+      organizationId: req.org.id,
+      action: 'approve',
+      resourceType: 'payroll_record',
+      resourceId: id,
+      details: { payrollRecordId: id, employeeId: payrollRecord.employee.id },
+      req,
+    }).catch(() => {});
 
     res.json(updated);
   } catch (error) {

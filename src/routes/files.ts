@@ -52,7 +52,7 @@ router.post('/upload', upload.single('file'), async (req: Request, res: Response
       return;
     }
 
-    const { entityType, entityId, ticketId, folder } = req.body;
+    const { entityType, entityId, ticketId, folder, employeeId } = req.body;
 
     // If ticketId provided, verify ticket exists and belongs to org (for ticket attachments)
     if (ticketId) {
@@ -61,6 +61,17 @@ router.post('/upload', upload.single('file'), async (req: Request, res: Response
       });
       if (!ticket) {
         res.status(404).json({ error: 'Ticket not found' });
+        return;
+      }
+    }
+
+    // If employeeId provided, verify employee exists and belongs to org (for employee documents)
+    if (employeeId) {
+      const employee = await prisma.employee.findFirst({
+        where: { id: String(employeeId), orgId: req.org.id },
+      });
+      if (!employee) {
+        res.status(404).json({ error: 'Employee not found' });
         return;
       }
     }
@@ -79,9 +90,10 @@ router.post('/upload', upload.single('file'), async (req: Request, res: Response
         url: uploadResult.url,
         storageType: uploadResult.storageType,
         storageKey: uploadResult.storageKey,
-        entityType: entityType || (ticketId ? 'ticket' : null),
-        entityId: entityId || (ticketId ? String(ticketId) : null),
+        entityType: entityType || (ticketId ? 'ticket' : employeeId ? 'employee' : null),
+        entityId: entityId || (ticketId ? String(ticketId) : employeeId ? String(employeeId) : null),
         ticketId: ticketId ? String(ticketId) : null,
+        employeeId: employeeId ? String(employeeId) : null,
       },
     });
 

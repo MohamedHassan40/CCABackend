@@ -57,6 +57,66 @@ router.get('/', requirePermission('hr.attendance.view'), async (req, res) => {
   }
 });
 
+// GET /api/hr/attendance/export - Export attendance as CSV (same filters as list)
+router.get('/export', requirePermission('hr.attendance.view'), async (req, res) => {
+  try {
+    if (!req.org) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+
+    const { employeeId, startDate, endDate, status } = req.query;
+    const where: any = { orgId: req.org.id };
+    if (employeeId) where.employeeId = employeeId as string;
+    if (startDate && endDate) {
+      where.date = { gte: new Date(startDate as string), lte: new Date(endDate as string) };
+    }
+    if (status) where.status = status as string;
+
+    const records = await prisma.attendanceRecord.findMany({
+      where,
+      include: {
+        employee: { select: { fullName: true, email: true, department: true } },
+      },
+      orderBy: { date: 'desc' },
+      take: 10000,
+    });
+
+    const escape = (v: string | number | null | undefined) => {
+      if (v == null) return '';
+      const s = String(v);
+      if (/[",\n\r]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+      return s;
+    };
+
+    const headers = ['Employee', 'Email', 'Department', 'Date', 'Clock In', 'Clock Out', 'Break (min)', 'Total Hours', 'Status', 'Notes'];
+    const rows = records.map((r) => [
+      r.employee.fullName,
+      r.employee.email ?? '',
+      r.employee.department ?? '',
+      r.date.toISOString().slice(0, 10),
+      r.clockIn ? r.clockIn.toISOString().slice(11, 19) : '',
+      r.clockOut ? r.clockOut.toISOString().slice(11, 19) : '',
+      r.breakDuration ?? '',
+      r.totalHours ?? '',
+      r.status ?? '',
+      r.notes ?? '',
+    ]);
+
+    const csv =
+      headers.map(escape).join(',') +
+      '\n' +
+      rows.map((row) => row.map(escape).join(',')).join('\n');
+
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', 'attachment; filename="attendance-export.csv"');
+    res.send(csv);
+  } catch (error) {
+    console.error('Error exporting attendance:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 // POST /api/hr/attendance - Create/update attendance record
 router.post('/', requirePermission('hr.attendance.create'), async (req, res) => {
   try {

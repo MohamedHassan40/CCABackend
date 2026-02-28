@@ -1,6 +1,8 @@
 import { Router } from 'express';
 import prisma from '../../core/db';
 import { requirePermission } from '../../middleware/permissions';
+import { createNotification, createNotificationForOrgWithPermission } from '../../core/notifications/helper';
+import { createAuditLog } from '../../middleware/audit';
 
 const router = Router();
 
@@ -454,6 +456,16 @@ router.post('/requests', requirePermission('hr.leave.create'), async (req, res) 
       });
     }
 
+    // Notify approvers when approval is required
+    if (leaveType.requiresApproval) {
+      createNotificationForOrgWithPermission(req.org!.id, 'hr.leave.approve', {
+        type: 'info',
+        title: 'New leave request',
+        message: `${leaveRequest.employee.fullName} requested ${days} day(s) of ${leaveRequest.leaveType.name}`,
+        link: `/dashboard/hr/leave`,
+      }).catch(() => {});
+    }
+
     res.status(201).json(leaveRequest);
   } catch (error) {
     console.error('Error creating leave request:', error);
@@ -479,6 +491,7 @@ router.put('/requests/:id/approve', requirePermission('hr.leave.approve'), async
       },
       include: {
         leaveType: true,
+        employee: { select: { fullName: true, userId: true } },
       },
     });
 
@@ -519,6 +532,27 @@ router.put('/requests/:id/approve', requirePermission('hr.leave.approve'), async
       });
     }
 
+    if (leaveRequest.employee.userId) {
+      createNotification({
+        userId: leaveRequest.employee.userId,
+        organizationId: req.org.id,
+        type: 'success',
+        title: 'Leave request approved',
+        message: `Your request for ${leaveRequest.days} day(s) of ${leaveRequest.leaveType.name} was approved.`,
+        link: '/dashboard/hr/leave',
+      }).catch(() => {});
+    }
+
+    createAuditLog({
+      userId: req.user.id,
+      organizationId: req.org.id,
+      action: 'approve',
+      resourceType: 'leave_request',
+      resourceId: id,
+      details: { leaveRequestId: id, employeeId: leaveRequest.employeeId, days: leaveRequest.days },
+      req,
+    }).catch(() => {});
+
     res.json(updated);
   } catch (error) {
     console.error('Error approving leave request:', error);
@@ -543,6 +577,7 @@ router.put('/requests/:id/reject', requirePermission('hr.leave.approve'), async 
         orgId: req.org.id,
         status: 'pending',
       },
+      include: { employee: { select: { userId: true, fullName: true } }, leaveType: true },
     });
 
     if (!leaveRequest) {
@@ -560,6 +595,27 @@ router.put('/requests/:id/reject', requirePermission('hr.leave.approve'), async 
       },
     });
 
+    if (leaveRequest.employee.userId) {
+      createNotification({
+        userId: leaveRequest.employee.userId,
+        organizationId: req.org.id,
+        type: 'warning',
+        title: 'Leave request rejected',
+        message: `Your request for ${leaveRequest.days} day(s) of ${leaveRequest.leaveType.name} was rejected.${rejectionReason ? ` Reason: ${rejectionReason}` : ''}`,
+        link: '/dashboard/hr/leave',
+      }).catch(() => {});
+    }
+
+    createAuditLog({
+      userId: req.user.id,
+      organizationId: req.org.id,
+      action: 'reject',
+      resourceType: 'leave_request',
+      resourceId: id,
+      details: { leaveRequestId: id, rejectionReason: rejectionReason || null },
+      req,
+    }).catch(() => {});
+
     res.json(updated);
   } catch (error) {
     console.error('Error rejecting leave request:', error);
@@ -567,7 +623,7 @@ router.put('/requests/:id/reject', requirePermission('hr.leave.approve'), async 
   }
 });
 
-// PUT /api/hr/leave/requests/:id/cancel - Cancel leave request (pending only)
+// PUT /api/hr/leave/requests/:id/cancel - Cancel leave request (pending or approved; refund balance if approved)
 router.put('/requests/:id/cancel', requirePermission('hr.leave.create'), async (req, res) => {
   try {
     if (!req.org) {
@@ -581,8 +637,9 @@ router.put('/requests/:id/cancel', requirePermission('hr.leave.create'), async (
       where: {
         id,
         orgId: req.org.id,
-        status: 'pending',
+        status: { in: ['pending', 'approved'] },
       },
+      include: { leaveType: true },
     });
 
     if (!leaveRequest) {
@@ -594,6 +651,39 @@ router.put('/requests/:id/cancel', requirePermission('hr.leave.create'), async (
       where: { id },
       data: { status: 'cancelled' },
     });
+
+    // If it was approved, return the days to the leave balance
+    if (leaveRequest.status === 'approved') {
+      const currentYear = new Date(leaveRequest.startDate).getFullYear();
+      const leaveBalance = await prisma.leaveBalance.findUnique({
+        where: {
+          employeeId_leaveTypeId_year: {
+            employeeId: leaveRequest.employeeId,
+            leaveTypeId: leaveRequest.leaveTypeId,
+            year: currentYear,
+          },
+        },
+      });
+      if (leaveBalance) {
+        await prisma.leaveBalance.update({
+          where: { id: leaveBalance.id },
+          data: {
+            usedDays: Math.max(0, leaveBalance.usedDays - leaveRequest.days),
+            remainingDays: leaveBalance.remainingDays + leaveRequest.days,
+          },
+        });
+      }
+    }
+
+    createAuditLog({
+      userId: req.user?.id ?? null,
+      organizationId: req.org.id,
+      action: 'cancel',
+      resourceType: 'leave_request',
+      resourceId: id,
+      details: { leaveRequestId: id, previousStatus: leaveRequest.status, refundedDays: leaveRequest.status === 'approved' ? leaveRequest.days : 0 },
+      req,
+    }).catch(() => {});
 
     res.json(updated);
   } catch (error) {
@@ -644,6 +734,108 @@ router.get('/balances', requirePermission('hr.leave.view'), async (req, res) => 
     res.json(balances);
   } catch (error) {
     console.error('Error fetching leave balances:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// POST /api/hr/leave/balances/initialize - Bulk initialize or roll over leave balances for a year
+router.post('/balances/initialize', requirePermission('hr.leave.manage'), async (req, res) => {
+  try {
+    if (!req.org) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+
+    const { year, carryOverFromPreviousYear } = req.body;
+    const targetYear = year ? parseInt(String(year), 10) : new Date().getFullYear();
+    if (isNaN(targetYear) || targetYear < 2000 || targetYear > 2100) {
+      res.status(400).json({ error: 'Invalid year' });
+      return;
+    }
+
+    const employees = await prisma.employee.findMany({
+      where: { orgId: req.org.id },
+      select: { id: true },
+    });
+    const leaveTypes = await prisma.leaveType.findMany({
+      where: { orgId: req.org.id, isActive: true },
+      select: { id: true, maxDays: true },
+    });
+
+    let created = 0;
+    let updated = 0;
+
+    for (const emp of employees) {
+      for (const lt of leaveTypes) {
+        const existing = await prisma.leaveBalance.findUnique({
+          where: {
+            employeeId_leaveTypeId_year: {
+              employeeId: emp.id,
+              leaveTypeId: lt.id,
+              year: targetYear,
+            },
+          },
+        });
+
+        if (existing) {
+          if (carryOverFromPreviousYear && targetYear > 2000) {
+            const prev = await prisma.leaveBalance.findUnique({
+              where: {
+                employeeId_leaveTypeId_year: {
+                  employeeId: emp.id,
+                  leaveTypeId: lt.id,
+                  year: targetYear - 1,
+                },
+              },
+            });
+            const carryDays = prev ? Math.min(prev.remainingDays, lt.maxDays ?? 0) : 0;
+            const totalDays = (lt.maxDays ?? 0) + carryDays;
+            await prisma.leaveBalance.update({
+              where: { id: existing.id },
+              data: {
+                totalDays,
+                remainingDays: totalDays - existing.usedDays,
+              },
+            });
+            updated++;
+          }
+          continue;
+        }
+
+        let totalDays = lt.maxDays ?? 0;
+        let usedDays = 0;
+        if (carryOverFromPreviousYear && targetYear > 2000) {
+          const prev = await prisma.leaveBalance.findUnique({
+            where: {
+              employeeId_leaveTypeId_year: {
+                employeeId: emp.id,
+                leaveTypeId: lt.id,
+                year: targetYear - 1,
+              },
+            },
+          });
+          const carryDays = prev ? Math.min(prev.remainingDays, lt.maxDays ?? 0) : 0;
+          totalDays = (lt.maxDays ?? 0) + carryDays;
+        }
+
+        await prisma.leaveBalance.create({
+          data: {
+            orgId: req.org.id,
+            employeeId: emp.id,
+            leaveTypeId: lt.id,
+            year: targetYear,
+            totalDays,
+            usedDays,
+            remainingDays: totalDays - usedDays,
+          },
+        });
+        created++;
+      }
+    }
+
+    res.json({ message: 'Leave balances initialized', created, updated, year: targetYear });
+  } catch (error) {
+    console.error('Error initializing leave balances:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 });

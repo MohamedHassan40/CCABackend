@@ -1,6 +1,37 @@
 import { Request, Response, NextFunction } from 'express';
 import prisma from '../core/db';
 
+export type AuditParams = {
+  userId: string | null;
+  organizationId: string | null;
+  action: string;
+  resourceType: string;
+  resourceId?: string | null;
+  details?: Record<string, unknown>;
+  req?: Request;
+};
+
+/** Call from route handlers to log key actions (leave approve/reject/cancel, payroll paid, member delete, ticket assign). */
+export async function createAuditLog(params: AuditParams): Promise<void> {
+  try {
+    const { userId, organizationId, action, resourceType, resourceId, details, req: reqOpt } = params;
+    await prisma.auditLog.create({
+      data: {
+        userId: userId || undefined,
+        organizationId: organizationId || undefined,
+        action,
+        resourceType,
+        resourceId: resourceId ?? null,
+        details: details ? JSON.stringify(details) : null,
+        ipAddress: reqOpt?.ip || (reqOpt?.headers['x-forwarded-for'] as string) || null,
+        userAgent: (reqOpt?.headers['user-agent'] as string) || null,
+      },
+    });
+  } catch (error) {
+    console.error('Audit log error:', error);
+  }
+}
+
 export function auditLog(action: string, resourceType: string) {
   return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     // Don't block the request if audit logging fails

@@ -25,6 +25,7 @@ import { securityHeaders, apiRateLimiter, helmetConfig } from './middleware/secu
 import { csrfProtection, setCsrfToken } from './middleware/csrf';
 import { verifyMoyasarWebhook, webhookIdempotency, logWebhookEvent } from './middleware/webhook-security';
 import { initErrorTracking, errorTrackingMiddleware } from './core/errorTracking';
+import { sanitizeApiError } from './core/apiErrors';
 import { startScheduledJobs } from './core/jobs/scheduler';
 import prisma from './core/db';
 
@@ -248,11 +249,11 @@ app.post('/api/billing/payment-callback',
   }
 });
 
-// Error handler with tracking
+// Error handler with tracking and user-friendly messages (no raw DB/stack in response)
 app.use((err: Error, req: express.Request, res: express.Response, next: express.NextFunction) => {
   errorTrackingMiddleware(err, req, res, next);
   console.error('Error:', err);
-  res.status(500).json({ error: 'Internal server error' });
+  res.status(500).json({ error: sanitizeApiError(err) });
 });
 
 // Start server

@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import prisma from '../../core/db';
 import { requirePermission } from '../../middleware/permissions';
+import { sendEmailQueued } from '../../core/email';
 
 const router = Router();
 
@@ -381,7 +382,7 @@ router.post('/applications', requirePermission('hr.recruitment.create'), async (
   }
 });
 
-// PUT /api/hr/recruitment/applications/:id - Update application
+// PUT /api/hr/recruitment/applications/:id - Update application (optional email to applicant on status change)
 router.put('/applications/:id', requirePermission('hr.recruitment.manage'), async (req, res) => {
   try {
     if (!req.org) {
@@ -390,12 +391,20 @@ router.put('/applications/:id', requirePermission('hr.recruitment.manage'), asyn
     }
 
     const { id } = req.params;
-    const { status, interviewDate, interviewNotes, rating, notes } = req.body;
+    const { status, interviewDate, interviewNotes, rating, notes, notifyApplicant } = req.body;
 
     const application = await prisma.jobApplication.findFirst({
       where: {
         id,
         orgId: req.org.id,
+      },
+      include: {
+        jobPosting: {
+          select: {
+            id: true,
+            title: true,
+          },
+        },
       },
     });
 
@@ -403,6 +412,8 @@ router.put('/applications/:id', requirePermission('hr.recruitment.manage'), asyn
       res.status(404).json({ error: 'Application not found' });
       return;
     }
+
+    const previousStatus = application.status;
 
     const updated = await prisma.jobApplication.update({
       where: { id },
@@ -429,6 +440,25 @@ router.put('/applications/:id', requirePermission('hr.recruitment.manage'), asyn
         },
       },
     });
+
+    // Optional: send email to applicant when status changes
+    if (notifyApplicant && status && status !== previousStatus && application.applicantEmail) {
+      const jobTitle = application.jobPosting?.title || 'the position';
+      const statusLabel = (status as string).charAt(0).toUpperCase() + (status as string).slice(1);
+      sendEmailQueued({
+        to: application.applicantEmail,
+        subject: `Application status update: ${jobTitle}`,
+        html: `
+          <div style="font-family: Arial, sans-serif; max-width: 600px;">
+            <p>Hello ${application.applicantName},</p>
+            <p>Your application for <strong>${jobTitle}</strong> has been updated.</p>
+            <p><strong>New status:</strong> ${statusLabel}</p>
+            ${interviewDate ? `<p><strong>Interview date:</strong> ${new Date(interviewDate).toLocaleDateString()}</p>` : ''}
+            <p>If you have any questions, please reply to this email or contact the hiring team.</p>
+          </div>
+        `,
+      }).catch(() => {});
+    }
 
     res.json(updated);
   } catch (error) {
