@@ -46,6 +46,11 @@ export const pmoManifest: ModuleManifest = {
       label: 'Milestones',
       permission: 'pmo.projects.view',
     },
+    {
+      path: '/pmo/clients',
+      label: 'Clients',
+      permission: 'pmo.client_managers.view',
+    },
   ],
   dashboardWidgets: [
     {
@@ -699,6 +704,49 @@ router.post('/projects/:id/client-managers', requirePermission('pmo.client_manag
     res.status(201).json(created);
   } catch (error) {
     console.error('Error creating client project manager:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// GET /api/pmo/client-managers - list all client managers for the org (for Clients tab)
+router.get('/client-managers', requirePermission('pmo.client_managers.view'), async (req, res) => {
+  try {
+    if (!req.org) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+
+    const clientManagers = await prisma.clientProjectManager.findMany({
+      where: {
+        project: {
+          orgId: req.org.id,
+        },
+      },
+      include: {
+        user: {
+          select: {
+            id: true,
+            email: true,
+            name: true,
+          },
+        },
+        project: {
+          select: {
+            id: true,
+            name: true,
+            clientName: true,
+          },
+        },
+      },
+      orderBy: [
+        { company: 'asc' },
+        { name: 'asc' },
+      ],
+    });
+
+    res.json(Array.isArray(clientManagers) ? clientManagers : []);
+  } catch (error) {
+    console.error('Error fetching client managers:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
