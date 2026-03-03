@@ -6,6 +6,7 @@ import { requirePermission } from '../../middleware/permissions';
 import { moduleRegistry } from '../../core/modules/registry';
 import { hashPassword } from '../../core/auth/password';
 import type { ModuleManifest } from '@cloud-org/shared';
+import tasksRouter from './tasks';
 
 const router = Router();
 
@@ -57,6 +58,9 @@ export const pmoManifest: ModuleManifest = {
   ],
 };
 
+// Project tasks (collaboration with client)
+router.use(tasksRouter);
+
 // Register module
 export function registerPmoModule(routerInstance: Router): void {
   routerInstance.use('/api/pmo', authMiddleware, requireModuleEnabled('pmo'), router);
@@ -73,18 +77,51 @@ export function registerPmoModule(routerInstance: Router): void {
 // PROJECTS
 // ============================================
 
-// GET /api/pmo/projects
+// GET /api/pmo/projects (client users see only projects where they are ClientProjectManager)
 router.get('/projects', requirePermission('pmo.projects.view'), async (req, res) => {
   try {
-    if (!req.org) {
+    if (!req.org || !req.user) {
       res.status(401).json({ error: 'Unauthorized' });
       return;
     }
 
+    const where: { orgId: string; id?: { in: string[] } } = { orgId: req.org.id };
+
+    // If user is client-only (no edit permission), restrict to projects where they are ClientProjectManager
+    if (!req.user.isSuperAdmin) {
+      const membership = await prisma.membership.findUnique({
+        where: {
+          userId_organizationId: { userId: req.user.id, organizationId: req.org.id },
+        },
+        include: {
+          membershipRoles: {
+            include: {
+              role: { include: { rolePermissions: { include: { permission: true } } } },
+            },
+          },
+        },
+      });
+      const hasEdit = membership?.membershipRoles?.some((mr) =>
+        mr.role.rolePermissions.some((rp) => rp.permission.key === 'pmo.projects.edit' || rp.permission.key === 'pmo.tasks.edit')
+      );
+      if (!hasEdit) {
+        const cpmProjects = await prisma.clientProjectManager.findMany({
+          where: { userId: req.user.id, isActive: true },
+          select: { projectId: true },
+        });
+        const projectIds = cpmProjects.map((c) => c.projectId);
+        if (projectIds.length > 0) {
+          where.id = { in: projectIds };
+        } else {
+          // Client user with no assigned projects → return empty
+          res.json([]);
+          return;
+        }
+      }
+    }
+
     const projects = await prisma.project.findMany({
-      where: {
-        orgId: req.org.id,
-      },
+      where,
       include: {
         projectManagers: {
           include: {

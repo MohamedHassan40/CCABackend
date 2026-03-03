@@ -47,6 +47,10 @@ model User {
   requestedSwaps         InventorySwap[]        @relation("RequestedSwaps")
   approvedSwaps          InventorySwap[]        @relation("ApprovedSwaps")
   clientProjectManagers  ClientProjectManager[]
+  projectTasksCreated    ProjectTask[]          @relation("ProjectTaskCreatedBy")
+  projectTasksAssigned   ProjectTask[]          @relation("ProjectTaskAssignedBy")
+  projectTaskComments    ProjectTaskComment[]
+  projectTaskTimeEntries ProjectTaskTimeEntry[]  @relation("ProjectTaskTimeEntryCreatedBy")
   documentCreated        Document[]             @relation("DocumentCreatedBy")
   assignedTasks          Task[]                 @relation("TaskAssignedBy")
   documentUpdated        Document[]             @relation("DocumentUpdatedBy")
@@ -133,6 +137,8 @@ model Organization {
   taskTrackers          TaskTracker[]
   calendarEvents        CalendarEvent[]
   absenceDeductionDecisions AbsenceDeductionDecision[]
+  projectTasks          ProjectTask[]
+  projectTaskTimeEntries ProjectTaskTimeEntry[]
 
   @@index([status])
   @@index([isActive])
@@ -384,6 +390,8 @@ model Employee {
   inventoryDamages     InventoryDamage[]
   inventorySwaps       InventorySwap[]
   projectManagers      ProjectManager[]
+  projectTasksAssigned ProjectTask[]            @relation("ProjectTaskAssignee")
+  projectTaskTimeEntries ProjectTaskTimeEntry[]
   tasks                Task[]
   taskTrackers         TaskTracker[]
   calendarEvents       CalendarEvent[]
@@ -1295,6 +1303,7 @@ model Project {
   issues                Issue[]
   milestones            ProjectMilestone[]
   documents             ProjectDocument[]
+  tasks                 ProjectTask[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -1333,8 +1342,9 @@ model ClientProjectManager {
   company   String? // Client company name
   isActive  Boolean @default(true)
 
-  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  project             Project             @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  user                User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  projectTaskComments ProjectTaskComment[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -1476,9 +1486,85 @@ model ProjectDocument {
   @@index([fileId])
 }
 
-// ============================================
-// DOCUMENT MANAGEMENT MODULE
-// ============================================
+// Project tasks: collaboration between org (project manager, employees) and company (client project manager)
+model ProjectTask {
+  id               String    @id @default(cuid())
+  projectId        String
+  orgId            String
+  title            String
+  description      String?
+  status           String    @default("submitted") // "draft", "submitted", "in_progress", "review", "completed", "cancelled"
+  priority         String    @default("medium") // "low", "medium", "high", "urgent"
+  dueDate          DateTime?
+  completedAt      DateTime?
+  createdById      String
+  createdByType    String    // "client_manager" | "org_user"
+  assigneeId       String?   // Employee ID (org side)
+  assignedById     String?
+  assignedAt       DateTime?
+  estimatedMinutes Int?
+
+  organization  Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  project       Project      @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  createdBy     User         @relation("ProjectTaskCreatedBy", fields: [createdById], references: [id], onDelete: Cascade)
+  assignee      Employee?    @relation("ProjectTaskAssignee", fields: [assigneeId], references: [id], onDelete: SetNull)
+  assignedBy    User?        @relation("ProjectTaskAssignedBy", fields: [assignedById], references: [id], onDelete: SetNull)
+  comments      ProjectTaskComment[]
+  timeEntries   ProjectTaskTimeEntry[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([projectId])
+  @@index([orgId])
+  @@index([status])
+  @@index([assigneeId])
+  @@index([dueDate])
+}
+
+model ProjectTaskComment {
+  id                    String   @id @default(cuid())
+  projectTaskId          String
+  content                String
+  userId                 String?  // Org user author
+  clientProjectManagerId String? // Client author
+  isInternal             Boolean @default(false)
+
+  projectTask          ProjectTask          @relation(fields: [projectTaskId], references: [id], onDelete: Cascade)
+  user                 User?                @relation(fields: [userId], references: [id], onDelete: SetNull)
+  clientProjectManager ClientProjectManager? @relation(fields: [clientProjectManagerId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([projectTaskId])
+  @@index([userId])
+  @@index([clientProjectManagerId])
+}
+
+model ProjectTaskTimeEntry {
+  id          String    @id @default(cuid())
+  projectTaskId String
+  orgId       String
+  employeeId String
+  minutes     Int
+  description String?
+  loggedAt    DateTime  @db.Date
+  createdById String?
+
+  projectTask ProjectTask @relation(fields: [projectTaskId], references: [id], onDelete: Cascade)
+  organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  employee    Employee   @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  createdBy   User?      @relation("ProjectTaskTimeEntryCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([projectTaskId])
+  @@index([orgId])
+  @@index([employeeId])
+  @@index([loggedAt])
+}
 
 model Document {
   id             String   @id @default(cuid())

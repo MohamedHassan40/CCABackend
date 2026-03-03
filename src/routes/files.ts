@@ -3,6 +3,7 @@ import multer from 'multer';
 import { storageService } from '../core/storage';
 import prisma from '../core/db';
 import { authMiddleware } from '../middleware/auth';
+import { canUserAccessProjectTask } from '../modules/pmo/project-access';
 
 const router = Router();
 
@@ -72,6 +73,16 @@ router.post('/upload', upload.single('file'), async (req: Request, res: Response
       });
       if (!employee) {
         res.status(404).json({ error: 'Employee not found' });
+        return;
+      }
+    }
+
+    // If entityType is project_task, verify task exists and user has access
+    if (entityType === 'project_task' && entityId) {
+      const taskId = String(entityId);
+      const hasAccess = await canUserAccessProjectTask(req.user!.id, req.org.id, taskId);
+      if (!hasAccess) {
+        res.status(404).json({ error: 'Task not found' });
         return;
       }
     }

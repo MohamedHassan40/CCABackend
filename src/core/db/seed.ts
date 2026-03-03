@@ -424,6 +424,10 @@ async function main() {
     { key: 'pmo.client_managers.view', name: 'View Client Managers' },
     { key: 'pmo.client_managers.create', name: 'Create Client Managers' },
     { key: 'pmo.client_managers.delete', name: 'Delete Client Managers' },
+    { key: 'pmo.tasks.view', name: 'View Project Tasks' },
+    { key: 'pmo.tasks.create', name: 'Create Project Tasks' },
+    { key: 'pmo.tasks.edit', name: 'Edit Project Tasks' },
+    { key: 'pmo.tasks.delete', name: 'Delete Project Tasks' },
     // Documents permissions
     { key: 'documents.view', name: 'View Documents' },
     { key: 'documents.create', name: 'Create Documents' },
@@ -618,6 +622,29 @@ async function main() {
         },
       });
     }
+  }
+
+  // Client project manager: view projects (filtered by API to assigned only), view + create tasks
+  const clientManagerTaskPerms = createdPermissions.filter(
+    (p) =>
+      p.key === 'pmo.projects.view' ||
+      p.key === 'pmo.tasks.view' ||
+      p.key === 'pmo.tasks.create'
+  );
+  for (const perm of clientManagerTaskPerms) {
+    await prisma.rolePermission.upsert({
+      where: {
+        roleId_permissionId: {
+          roleId: pmoClientManagerRole.id,
+          permissionId: perm.id,
+        },
+      },
+      update: {},
+      create: {
+        roleId: pmoClientManagerRole.id,
+        permissionId: perm.id,
+      },
+    });
   }
 
   // Documents viewer: documents.view + documents.*.view
