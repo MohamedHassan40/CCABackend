@@ -1304,6 +1304,7 @@ model Project {
   milestones            ProjectMilestone[]
   documents             ProjectDocument[]
   tasks                 ProjectTask[]
+  clientContacts        ProjectClientContact[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -1352,6 +1353,25 @@ model ClientProjectManager {
   @@unique([projectId, userId])
   @@index([projectId])
   @@index([userId])
+}
+
+// Client team/contacts (no login) - people on the client side under this project
+model ProjectClientContact {
+  id        String  @id @default(cuid())
+  projectId String
+  name      String
+  email     String?
+  role      String? // e.g. "Project Manager", "Developer", "Designer"
+  phone     String?
+  company   String? // Client company name (for grouping)
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([projectId])
+  @@index([company])
 }
 
 model Deliverable {

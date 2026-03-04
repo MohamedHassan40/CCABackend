@@ -244,6 +244,7 @@ router.get('/projects/:id', requirePermission('pmo.projects.view'), async (req, 
             createdAt: 'desc',
           },
         },
+        clientContacts: true,
       },
     });
 
@@ -824,6 +825,123 @@ router.delete('/projects/:id/client-managers/:managerId', requirePermission('pmo
     res.json({ message: 'Client project manager removed successfully' });
   } catch (error) {
     console.error('Error removing client project manager:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// ============================================
+// PROJECT CLIENT CONTACTS (client team / employees - no login)
+// ============================================
+
+// GET /api/pmo/projects/:id/client-contacts
+router.get('/projects/:id/client-contacts', requirePermission('pmo.client_managers.view'), async (req, res) => {
+  try {
+    if (!req.org) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+
+    const { id } = req.params;
+
+    const project = await prisma.project.findFirst({
+      where: {
+        id,
+        orgId: req.org.id,
+      },
+    });
+
+    if (!project) {
+      res.status(404).json({ error: 'Project not found' });
+      return;
+    }
+
+    const contacts = await prisma.projectClientContact.findMany({
+      where: { projectId: id },
+      orderBy: [{ company: 'asc' }, { name: 'asc' }],
+    });
+
+    res.json(Array.isArray(contacts) ? contacts : []);
+  } catch (error) {
+    console.error('Error fetching project client contacts:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// POST /api/pmo/projects/:id/client-contacts
+router.post('/projects/:id/client-contacts', requirePermission('pmo.client_managers.create'), async (req, res) => {
+  try {
+    if (!req.org) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+
+    const { id } = req.params;
+    const { name, email, role, phone, company } = req.body;
+
+    if (!name) {
+      res.status(400).json({ error: 'Name is required' });
+      return;
+    }
+
+    const project = await prisma.project.findFirst({
+      where: {
+        id,
+        orgId: req.org.id,
+      },
+    });
+
+    if (!project) {
+      res.status(404).json({ error: 'Project not found' });
+      return;
+    }
+
+    const contact = await prisma.projectClientContact.create({
+      data: {
+        projectId: id,
+        name,
+        email: email || null,
+        role: role || null,
+        phone: phone || null,
+        company: company || project.clientName || null,
+      },
+    });
+
+    res.status(201).json(contact);
+  } catch (error) {
+    console.error('Error creating project client contact:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// DELETE /api/pmo/projects/:id/client-contacts/:contactId
+router.delete('/projects/:id/client-contacts/:contactId', requirePermission('pmo.client_managers.delete'), async (req, res) => {
+  try {
+    if (!req.org) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+
+    const { id, contactId } = req.params;
+
+    const project = await prisma.project.findFirst({
+      where: {
+        id,
+        orgId: req.org.id,
+      },
+    });
+
+    if (!project) {
+      res.status(404).json({ error: 'Project not found' });
+      return;
+    }
+
+    await prisma.projectClientContact.delete({
+      where: { id: contactId },
+    });
+
+    res.json({ message: 'Client contact removed successfully' });
+  } catch (error) {
+    console.error('Error removing project client contact:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
