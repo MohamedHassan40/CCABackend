@@ -182,6 +182,8 @@ router.get('/', authMiddleware, async (req: Request, res: Response) => {
         isOrgExpired: (currentOrg as { expiresAt?: Date | null }).expiresAt
           ? (currentOrg as { expiresAt: Date }).expiresAt < new Date()
           : false,
+        organizationHrCode: currentOrg.organizationHrCode ?? null,
+        employeeIdSchemeLocked: currentOrg.employeeIdSchemeLocked ?? false,
       },
       roles,
       isOrgAdmin,

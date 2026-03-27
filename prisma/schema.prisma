@@ -140,6 +140,17 @@ model Organization {
   projectTasks          ProjectTask[]
   projectTaskTimeEntries ProjectTaskTimeEntry[]
 
+  /// HR: prefix before numeric part (e.g. "Emp-" or "Employee - ")
+  employeeCodePrefix    String?
+  /// HR: zero-padding width for the numeric suffix (e.g. 5 for 00001)
+  employeeCodePadLength Int?
+  /// HR: next sequence number to suggest when creating employees
+  employeeCodeNextSeq   Int?
+  /// HR: short org-wide code used in employee IDs (e.g. ACME → ACME-01)
+  organizationHrCode    String?
+  /// HR: when true, employee IDs follow the org scheme only (no manual edits)
+  employeeIdSchemeLocked Boolean @default(false)
+
   @@index([status])
   @@index([isActive])
 }
@@ -364,6 +375,8 @@ model Employee {
   id             String    @id @default(cuid())
   orgId          String
   fullName       String
+  /// Organization-scoped display/reference ID (e.g. Emp-01). Must end with digits.
+  employeeCode   String?
   email          String?
   position       String?
   department     String?
@@ -374,6 +387,17 @@ model Employee {
   notes          String? // Additional notes about employee
   salary         Int? // Monthly salary in cents
   employmentType String? // "full_time", "part_time", "contract", "intern", "volunteer"
+  dateOfBirth    DateTime? @db.Date
+  nationality    String?
+  religion       String?
+  gender         String?
+  maritalStatus  String?
+  address        String?
+  city           String?
+  country        String?
+  emergencyContactName  String?
+  emergencyContactPhone String?
+  governmentId   String? // National ID / passport / civil ID
 
   organization         Organization          @relation(fields: [orgId], references: [id], onDelete: Cascade)
   user                 User?                 @relation(fields: [userId], references: [id], onDelete: SetNull)
@@ -400,6 +424,7 @@ model Employee {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  @@unique([orgId, employeeCode])
   @@index([orgId])
   @@index([userId])
 }

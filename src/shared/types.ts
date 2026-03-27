@@ -59,6 +59,10 @@ export type MeResponse = {
     slug: string;
     expiresAt?: string | null;
     isOrgExpired?: boolean;
+    /** HR: org-wide employee ID prefix code (e.g. ACME) when configured */
+    organizationHrCode?: string | null;
+    /** HR: employee IDs follow org scheme only; manual edits disabled */
+    employeeIdSchemeLocked?: boolean;
   } | null;
   memberships: Array<{
     id: string;

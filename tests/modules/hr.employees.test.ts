@@ -176,6 +176,7 @@ describe('HR Module - Employees', () => {
         email: 'john@example.com',
         position: 'Developer',
         department: 'Engineering',
+        employeeCode: 'EMP-01',
       };
 
       const response = await api.post('/api/hr/employees').send(employeeData);
@@ -186,6 +187,7 @@ describe('HR Module - Employees', () => {
       expect(response.body.position).toBe(employeeData.position);
       expect(response.body.department).toBe(employeeData.department);
       expect(response.body.orgId).toBe(org.id);
+      expect(response.body.employeeCode).toBe('EMP-01');
     });
 
     it('should require fullName', async () => {
@@ -204,6 +206,7 @@ describe('HR Module - Employees', () => {
         password: 'SecurePass123!',
         position: 'Developer',
         createUserAccount: true,
+        employeeCode: 'EMP-02',
       };
 
       const response = await api.post('/api/hr/employees').send(employeeData);

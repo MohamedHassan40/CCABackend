@@ -43,6 +43,7 @@ router.get('/', async (req: Request, res: Response) => {
           OR: [
             { fullName: { contains: searchTerm, mode: 'insensitive' } },
             { email: { contains: searchTerm, mode: 'insensitive' } },
+            { employeeCode: { contains: searchTerm, mode: 'insensitive' } },
             { position: { contains: searchTerm, mode: 'insensitive' } },
             { department: { contains: searchTerm, mode: 'insensitive' } },
           ],
