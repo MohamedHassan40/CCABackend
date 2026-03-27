@@ -245,6 +245,13 @@ router.get('/projects/:id', requirePermission('pmo.projects.view'), async (req, 
           },
         },
         clientContacts: true,
+        projectClients: {
+          include: {
+            _count: {
+              select: { clientProjectManagers: true, clientContacts: true },
+            },
+          },
+        },
       },
     });
 
@@ -579,7 +586,7 @@ router.post('/projects/:id/client-managers', requirePermission('pmo.client_manag
     }
 
     const { id } = req.params;
-    const { name, email, password, phone, company } = req.body;
+    const { name, email, password, phone, company, projectClientId } = req.body;
 
     if (!name || !email || !password) {
       res.status(400).json({ error: 'Name, email, and password are required' });
@@ -680,6 +687,7 @@ router.post('/projects/:id/client-managers', requirePermission('pmo.client_manag
     const clientManager = await prisma.clientProjectManager.create({
       data: {
         projectId: id,
+        projectClientId: projectClientId || null,
         userId: user.id,
         name,
         email,
@@ -830,6 +838,169 @@ router.delete('/projects/:id/client-managers/:managerId', requirePermission('pmo
 });
 
 // ============================================
+// PROJECT CLIENTS (client companies - add then add employees under each)
+// ============================================
+
+// GET /api/pmo/projects/:id/clients
+router.get('/projects/:id/clients', requirePermission('pmo.client_managers.view'), async (req, res) => {
+  try {
+    if (!req.org) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+
+    const { id } = req.params;
+
+    const project = await prisma.project.findFirst({
+      where: { id, orgId: req.org.id },
+    });
+
+    if (!project) {
+      res.status(404).json({ error: 'Project not found' });
+      return;
+    }
+
+    const clients = await prisma.projectClient.findMany({
+      where: { projectId: id },
+      include: {
+        _count: { select: { clientProjectManagers: true, clientContacts: true } },
+      },
+      orderBy: { name: 'asc' },
+    });
+
+    res.json(Array.isArray(clients) ? clients : []);
+  } catch (error) {
+    console.error('Error fetching project clients:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// POST /api/pmo/projects/:id/clients
+router.post('/projects/:id/clients', requirePermission('pmo.client_managers.create'), async (req, res) => {
+  try {
+    if (!req.org) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+
+    const { id } = req.params;
+    const { name, website, imageUrl } = req.body;
+
+    if (!name || !name.trim()) {
+      res.status(400).json({ error: 'Client name is required' });
+      return;
+    }
+
+    const project = await prisma.project.findFirst({
+      where: { id, orgId: req.org.id },
+    });
+
+    if (!project) {
+      res.status(404).json({ error: 'Project not found' });
+      return;
+    }
+
+    const client = await prisma.projectClient.create({
+      data: {
+        projectId: id,
+        name: name.trim(),
+        website: website?.trim() || null,
+        imageUrl: imageUrl?.trim() || null,
+      },
+    });
+
+    res.status(201).json(client);
+  } catch (error) {
+    console.error('Error creating project client:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// PUT /api/pmo/projects/:id/clients/:clientId
+router.put('/projects/:id/clients/:clientId', requirePermission('pmo.client_managers.create'), async (req, res) => {
+  try {
+    if (!req.org) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+
+    const { id, clientId } = req.params;
+    const { name, website, imageUrl } = req.body;
+
+    const project = await prisma.project.findFirst({
+      where: { id, orgId: req.org.id },
+    });
+
+    if (!project) {
+      res.status(404).json({ error: 'Project not found' });
+      return;
+    }
+
+    const existing = await prisma.projectClient.findFirst({
+      where: { id: clientId, projectId: id },
+    });
+
+    if (!existing) {
+      res.status(404).json({ error: 'Client not found' });
+      return;
+    }
+
+    const updated = await prisma.projectClient.update({
+      where: { id: clientId },
+      data: {
+        ...(name !== undefined && { name: name?.trim() || existing.name }),
+        ...(website !== undefined && { website: website?.trim() || null }),
+        ...(imageUrl !== undefined && { imageUrl: imageUrl?.trim() || null }),
+      },
+    });
+
+    res.json(updated);
+  } catch (error) {
+    console.error('Error updating project client:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// DELETE /api/pmo/projects/:id/clients/:clientId
+router.delete('/projects/:id/clients/:clientId', requirePermission('pmo.client_managers.delete'), async (req, res) => {
+  try {
+    if (!req.org) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+
+    const { id, clientId } = req.params;
+
+    const project = await prisma.project.findFirst({
+      where: { id, orgId: req.org.id },
+    });
+
+    if (!project) {
+      res.status(404).json({ error: 'Project not found' });
+      return;
+    }
+
+    const existing = await prisma.projectClient.findFirst({
+      where: { id: clientId, projectId: id },
+    });
+
+    if (!existing) {
+      res.status(404).json({ error: 'Client not found' });
+      return;
+    }
+
+    await prisma.projectClient.delete({
+      where: { id: clientId },
+    });
+
+    res.json({ message: 'Client removed successfully' });
+  } catch (error) {
+    console.error('Error deleting project client:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// ============================================
 // PROJECT CLIENT CONTACTS (client team / employees - no login)
 // ============================================
 
@@ -876,7 +1047,7 @@ router.post('/projects/:id/client-contacts', requirePermission('pmo.client_manag
     }
 
     const { id } = req.params;
-    const { name, email, role, phone, company } = req.body;
+    const { name, email, role, phone, company, projectClientId } = req.body;
 
     if (!name) {
       res.status(400).json({ error: 'Name is required' });
@@ -895,14 +1066,23 @@ router.post('/projects/:id/client-contacts', requirePermission('pmo.client_manag
       return;
     }
 
+    let companyVal = company || project.clientName || null;
+    if (projectClientId) {
+      const pc = await prisma.projectClient.findFirst({
+        where: { id: projectClientId, projectId: id },
+      });
+      if (pc) companyVal = pc.name;
+    }
+
     const contact = await prisma.projectClientContact.create({
       data: {
         projectId: id,
+        projectClientId: projectClientId || null,
         name,
         email: email || null,
         role: role || null,
         phone: phone || null,
-        company: company || project.clientName || null,
+        company: companyVal,
       },
     });
 

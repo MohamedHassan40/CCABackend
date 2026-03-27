@@ -1305,6 +1305,7 @@ model Project {
   documents             ProjectDocument[]
   tasks                 ProjectTask[]
   clientContacts        ProjectClientContact[]
+  projectClients        ProjectClient[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -1313,6 +1314,24 @@ model Project {
   @@index([status])
   @@index([priority])
   @@index([startDate, endDate])
+}
+
+// Client (company) on a project - add clients then add employees under each
+model ProjectClient {
+  id        String  @id @default(cuid())
+  projectId String
+  name      String  // Client name
+  website   String?
+  imageUrl  String? // Optional logo/image URL
+
+  project                Project                @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  clientProjectManagers  ClientProjectManager[]
+  clientContacts         ProjectClientContact[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([projectId])
 }
 
 model ProjectManager {
@@ -1334,16 +1353,18 @@ model ProjectManager {
 }
 
 model ClientProjectManager {
-  id        String  @id @default(cuid())
-  projectId String
-  userId    String // User account for client project manager
-  name      String
-  email     String
-  phone     String?
-  company   String? // Client company name
-  isActive  Boolean @default(true)
+  id              String  @id @default(cuid())
+  projectId       String
+  projectClientId String? // Optional: link to specific client (company) on this project
+  userId          String // User account for client project manager
+  name            String
+  email           String
+  phone           String?
+  company         String? // Legacy / display; prefer projectClientId
+  isActive        Boolean @default(true)
 
   project             Project             @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  projectClient       ProjectClient?      @relation(fields: [projectClientId], references: [id], onDelete: SetNull)
   user                User                @relation(fields: [userId], references: [id], onDelete: Cascade)
   projectTaskComments ProjectTaskComment[]
 
@@ -1352,25 +1373,29 @@ model ClientProjectManager {
 
   @@unique([projectId, userId])
   @@index([projectId])
+  @@index([projectClientId])
   @@index([userId])
 }
 
-// Client team/contacts (no login) - people on the client side under this project
+// Client team/contacts (no login) - employees under a client on this project
 model ProjectClientContact {
-  id        String  @id @default(cuid())
-  projectId String
-  name      String
-  email     String?
-  role      String? // e.g. "Project Manager", "Developer", "Designer"
-  phone     String?
-  company   String? // Client company name (for grouping)
+  id              String  @id @default(cuid())
+  projectId       String
+  projectClientId String? // Optional: link to specific client (company) on this project
+  name            String
+  email           String?
+  role            String? // e.g. "Project Manager", "Developer", "Designer"
+  phone           String?
+  company         String? // Legacy / display; prefer projectClientId
 
-  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  project       Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  projectClient ProjectClient? @relation(fields: [projectClientId], references: [id], onDelete: SetNull)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@index([projectId])
+  @@index([projectClientId])
   @@index([company])
 }
 
