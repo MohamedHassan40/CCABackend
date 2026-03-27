@@ -74,11 +74,23 @@ async function resolveNewEmployeeCodeForOrg(
       }
       return { error: 'Could not allocate a unique employee ID', status: 500 };
     }
-    return {
-      error:
-        'Employee ID is required until your numbering pattern is set. Use text ending in digits (e.g. Emp-01 or Employee - 00001).',
-      status: 400,
-    };
+    // No org numbering scheme yet: assign sequential EMP-001, EMP-002, … (ends with digits for validation)
+    const existing = await prisma.employee.findMany({
+      where: { orgId },
+      select: { employeeCode: true },
+    });
+    const used = new Set(
+      existing.map((e) => e.employeeCode).filter((c): c is string => Boolean(c))
+    );
+    let seq = 1;
+    for (let attempt = 0; attempt < 10000; attempt++) {
+      const candidate = `EMP-${String(seq).padStart(3, '0')}`;
+      if (!used.has(candidate)) {
+        return { code: candidate };
+      }
+      seq += 1;
+    }
+    return { error: 'Could not allocate a unique employee ID', status: 500 };
   }
 
   const parsed = parseEmployeeCode(trimmed);

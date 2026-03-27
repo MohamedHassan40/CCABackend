@@ -500,7 +500,7 @@ router.get('/tickets/:orgSlug/categories', async (req: Request, res: Response) =
 router.post('/tickets/:orgSlug', async (req: Request, res: Response) => {
   try {
     const { orgSlug } = req.params;
-    const { title, description, priority, categoryId, submittedByEmail, submittedByName } = req.body;
+    const { title, description, categoryId, submittedByEmail, submittedByName } = req.body;
 
     if (!title || !submittedByEmail) {
       res.status(400).json({ error: 'Title and email are required' });
@@ -545,7 +545,8 @@ router.post('/tickets/:orgSlug', async (req: Request, res: Response) => {
         orgId: org.id,
         title,
         description: description || null,
-        priority: priority || 'medium',
+        // Public submitters cannot set priority; triage by staff inside the org
+        priority: 'medium',
         status: 'open',
         createdById: null,
         assigneeId: null,
