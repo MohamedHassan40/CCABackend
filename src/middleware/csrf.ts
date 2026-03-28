@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import crypto from 'crypto';
+import { getCorsOriginsList } from '../core/config';
 
 // CSRF token generation and validation
 const CSRF_SECRET = process.env.CSRF_SECRET || crypto.randomBytes(32).toString('hex');
@@ -29,9 +30,9 @@ export function csrfProtection(req: Request, res: Response, next: NextFunction):
   // For API requests, we can use a simpler approach with origin checking
   // In production, you should use proper CSRF tokens stored in sessions
   const origin = req.headers.origin || req.headers.referer;
-  const allowedOrigins = (process.env.CORS_ORIGIN || '').split(',').map(o => o.trim());
+  const allowedOrigins = getCorsOriginsList();
 
-  if (origin && allowedOrigins.some(allowed => origin.startsWith(allowed))) {
+  if (origin && allowedOrigins.some((allowed) => allowed && origin.startsWith(allowed))) {
     next();
     return;
   }

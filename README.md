@@ -44,6 +44,17 @@ Standalone backend API for the Cloud Org / CCA system. Express + TypeScript + Pr
 
 - **Port**: 3001  
 - **Database**: `postgresql://user:password@localhost:5432/cloud_org`  
-- **CORS**: `http://localhost:3000`  
+- **CORS**: `http://localhost:3000` (override with `CORS_ORIGIN` or `FRONTEND_URL`)
 
 Point the frontend (`NEXT_PUBLIC_API_URL`) to this API URL (e.g. `http://localhost:3001`).
+
+### Production (e.g. Vercel + Railway)
+
+If the browser shows **CORS policy** / **No `Access-Control-Allow-Origin` header** for `/api/me`, the API does not list your **exact** frontend origin. Set on the backend host (e.g. Railway):
+
+- **`CORS_ORIGIN`** = `https://your-app.vercel.app` (HTTPS, no trailing slash), or  
+- **`FRONTEND_URL`** = same value (used if `CORS_ORIGIN` is unset).
+
+Multiple environments: `CORS_ORIGIN=https://app.vercel.app,http://localhost:3000`
+
+Redeploy the backend after changing variables.
