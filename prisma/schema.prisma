@@ -139,6 +139,7 @@ model Organization {
   absenceDeductionDecisions AbsenceDeductionDecision[]
   projectTasks          ProjectTask[]
   projectTaskTimeEntries ProjectTaskTimeEntry[]
+  departments           Department[]
 
   /// HR: prefix before numeric part (e.g. "Emp-" or "Employee - ")
   employeeCodePrefix    String?
@@ -370,6 +371,27 @@ model Payment {
 // MODULE-SPECIFIC MODELS
 // ============================================
 
+// HR: org-defined departments (hierarchical)
+model Department {
+  id                   String       @id @default(cuid())
+  orgId                String
+  name                 String
+  description          String?
+  parentDepartmentId   String?
+  sortOrder            Int          @default(0)
+
+  organization       Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  parentDepartment   Department?  @relation("DepartmentHierarchy", fields: [parentDepartmentId], references: [id], onDelete: SetNull)
+  childDepartments     Department[] @relation("DepartmentHierarchy")
+  employees          Employee[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([orgId])
+  @@index([parentDepartmentId])
+}
+
 // HR Module
 model Employee {
   id             String    @id @default(cuid())
@@ -379,7 +401,11 @@ model Employee {
   employeeCode   String?
   email          String?
   position       String?
+  /// Legacy free-text department; prefer departmentId when set.
   department     String?
+  departmentId   String?
+  /// Direct manager (reporting line). Same org only.
+  reportsToId    String?
   userId         String? // Link to User account if created
   photoUrl       String? // Profile picture URL
   phone          String?
@@ -400,6 +426,9 @@ model Employee {
   governmentId   String? // National ID / passport / civil ID
 
   organization         Organization          @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  departmentRef        Department?           @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+  reportsTo            Employee?             @relation("EmployeeReporting", fields: [reportsToId], references: [id], onDelete: SetNull)
+  directReports        Employee[]            @relation("EmployeeReporting")
   user                 User?                 @relation(fields: [userId], references: [id], onDelete: SetNull)
   documents            File[]                @relation("EmployeeDocuments")
   leaveRequests        LeaveRequest[]
@@ -427,6 +456,8 @@ model Employee {
   @@unique([orgId, employeeCode])
   @@index([orgId])
   @@index([userId])
+  @@index([departmentId])
+  @@index([reportsToId])
 }
 
 // HR Decisions - Absence/Delay Deduction

@@ -20,7 +20,9 @@ import announcementsRouter from './announcements';
 import complaintsRouter from './complaints';
 import requestsRouter from './requests';
 import assetsRouter from './assets';
+import departmentsRouter from './departments';
 import { formatEmployeeCode, parseEmployeeCode, syncOrgEmployeeCodeSequence } from './employeeCode';
+import { assertDepartmentInOrg, assertManagerInOrg } from './employeeHierarchy';
 
 const router = Router();
 
@@ -326,6 +328,16 @@ export const hrManifest: ModuleManifest = {
       permission: 'hr.employees.view',
     },
     {
+      path: '/hr/departments',
+      label: 'Departments',
+      permission: 'hr.employees.view',
+    },
+    {
+      path: '/hr/organization',
+      label: 'Org chart',
+      permission: 'hr.employees.view',
+    },
+    {
       path: '/hr/leave',
       label: 'Leave Management',
       permission: 'hr.leave.view',
@@ -395,6 +407,7 @@ export function registerHrModule(routerInstance: Router): void {
   routerInstance.use('/api/hr/complaints', authMiddleware, requireModuleEnabled('hr'), complaintsRouter);
   routerInstance.use('/api/hr/requests', authMiddleware, requireModuleEnabled('hr'), requestsRouter);
   routerInstance.use('/api/hr/assets', authMiddleware, requireModuleEnabled('hr'), assetsRouter);
+  routerInstance.use('/api/hr/departments', authMiddleware, requireModuleEnabled('hr'), departmentsRouter);
 
   // Register in module registry
   moduleRegistry.register({
@@ -432,6 +445,8 @@ router.get('/employees', requirePermission('hr.employees.view'), async (req, res
         { city: { contains: search, mode: 'insensitive' } },
         { country: { contains: search, mode: 'insensitive' } },
         { governmentId: { contains: search, mode: 'insensitive' } },
+        { departmentRef: { name: { contains: search, mode: 'insensitive' } } },
+        { reportsTo: { fullName: { contains: search, mode: 'insensitive' } } },
       ];
     }
 
@@ -441,6 +456,10 @@ router.get('/employees', requirePermission('hr.employees.view'), async (req, res
         orderBy: { createdAt: 'desc' },
         take: limit,
         skip,
+        include: {
+          departmentRef: { select: { id: true, name: true } },
+          reportsTo: { select: { id: true, fullName: true, employeeCode: true } },
+        },
       }),
       prisma.employee.count({ where }),
     ]);
@@ -475,6 +494,8 @@ router.get('/employees/export', requirePermission('hr.employees.view'), async (r
         { city: { contains: search, mode: 'insensitive' } },
         { country: { contains: search, mode: 'insensitive' } },
         { governmentId: { contains: search, mode: 'insensitive' } },
+        { departmentRef: { name: { contains: search, mode: 'insensitive' } } },
+        { reportsTo: { fullName: { contains: search, mode: 'insensitive' } } },
       ];
     }
 
@@ -482,6 +503,10 @@ router.get('/employees/export', requirePermission('hr.employees.view'), async (r
       where,
       orderBy: { createdAt: 'desc' },
       take: 10000,
+      include: {
+        departmentRef: { select: { id: true, name: true } },
+        reportsTo: { select: { id: true, fullName: true, employeeCode: true } },
+      },
     });
 
     const escape = (v: string | number | null | undefined) => {
@@ -498,6 +523,7 @@ router.get('/employees/export', requirePermission('hr.employees.view'), async (r
       'Phone',
       'Position',
       'Department',
+      'Reports to',
       'Employment Type',
       'Hire Date',
       'Date of Birth',
@@ -522,7 +548,10 @@ router.get('/employees/export', requirePermission('hr.employees.view'), async (r
       e.email ?? '',
       e.phone ?? '',
       e.position ?? '',
-      e.department ?? '',
+      e.departmentRef?.name ?? e.department ?? '',
+      e.reportsTo
+        ? `${e.reportsTo.fullName}${e.reportsTo.employeeCode ? ` (${e.reportsTo.employeeCode})` : ''}`
+        : '',
       e.employmentType ?? '',
       dStr(e.hireDate),
       dStr(e.dateOfBirth),
@@ -651,6 +680,14 @@ router.post('/employees', requirePermission('hr.employees.create'), async (req, 
     const { fullName, email, password, position, department, createUserAccount, roleKeys, employeeCode } =
       req.body;
     const profile = profileForCreate(req.body as Record<string, unknown>);
+    const departmentId =
+      typeof req.body.departmentId === 'string' && req.body.departmentId.trim()
+        ? req.body.departmentId.trim()
+        : null;
+    const reportsToId =
+      typeof req.body.reportsToId === 'string' && req.body.reportsToId.trim()
+        ? req.body.reportsToId.trim()
+        : null;
 
     if (!fullName) {
       res.status(400).json({ error: 'Full name is required' });
@@ -790,6 +827,27 @@ router.post('/employees', requirePermission('hr.employees.create'), async (req, 
       }
     }
 
+    const dCheck = await assertDepartmentInOrg(orgId, departmentId);
+    if (!dCheck.ok) {
+      res.status(dCheck.status).json({ error: dCheck.error });
+      return;
+    }
+    const mCheck = await assertManagerInOrg(orgId, reportsToId, null);
+    if (!mCheck.ok) {
+      res.status(mCheck.status).json({ error: mCheck.error });
+      return;
+    }
+
+    let departmentLabel: string | null =
+      typeof department === 'string' && department.trim() ? department.trim() : null;
+    if (departmentId) {
+      const dr = await prisma.department.findFirst({
+        where: { id: departmentId, orgId },
+        select: { name: true },
+      });
+      departmentLabel = dr?.name ?? departmentLabel;
+    }
+
     const resolvedCode = await resolveNewEmployeeCodeForOrg(orgId, employeeCode);
     if ('error' in resolvedCode) {
       res.status(resolvedCode.status).json({ error: resolvedCode.error });
@@ -804,7 +862,9 @@ router.post('/employees', requirePermission('hr.employees.create'), async (req, 
           fullName,
           email: email || null,
           position: position || null,
-          department: department || null,
+          department: departmentLabel,
+          departmentId,
+          reportsToId,
           userId: userId,
           employeeCode: codeFinal,
           ...profile,
@@ -855,6 +915,18 @@ router.put('/employees/:id', requirePermission('hr.employees.edit'), async (req,
     const { id } = req.params;
     const { fullName, email, position, department, roleKeys, employeeCode: bodyEmployeeCode } = req.body;
     const profilePatch = patchEmployeeProfile(req.body as Record<string, unknown>);
+    const departmentIdIn =
+      req.body.departmentId !== undefined
+        ? typeof req.body.departmentId === 'string' && req.body.departmentId.trim()
+          ? req.body.departmentId.trim()
+          : null
+        : undefined;
+    const reportsToIdIn =
+      req.body.reportsToId !== undefined
+        ? typeof req.body.reportsToId === 'string' && req.body.reportsToId.trim()
+          ? req.body.reportsToId.trim()
+          : null
+        : undefined;
 
     const employee = await prisma.employee.findFirst({
       where: {
@@ -913,6 +985,34 @@ router.put('/employees/:id', requirePermission('hr.employees.edit'), async (req,
       nextEmployeeCode = trimmed;
     }
 
+    if (departmentIdIn !== undefined) {
+      const dCheck = await assertDepartmentInOrg(orgId, departmentIdIn);
+      if (!dCheck.ok) {
+        res.status(dCheck.status).json({ error: dCheck.error });
+        return;
+      }
+    }
+    if (reportsToIdIn !== undefined) {
+      const mCheck = await assertManagerInOrg(orgId, reportsToIdIn, id);
+      if (!mCheck.ok) {
+        res.status(mCheck.status).json({ error: mCheck.error });
+        return;
+      }
+    }
+
+    let syncedDepartmentName: string | null | undefined = undefined;
+    if (departmentIdIn !== undefined) {
+      if (departmentIdIn) {
+        const dr = await prisma.department.findFirst({
+          where: { id: departmentIdIn, orgId },
+          select: { name: true },
+        });
+        syncedDepartmentName = dr?.name ?? null;
+      } else {
+        syncedDepartmentName = typeof department === 'string' ? department.trim() || null : null;
+      }
+    }
+
     // Update employee data
     const updated = await prisma.$transaction(async (tx) => {
       const emp = await tx.employee.update({
@@ -921,7 +1021,12 @@ router.put('/employees/:id', requirePermission('hr.employees.edit'), async (req,
           ...(fullName && { fullName }),
           ...(email !== undefined && { email: email || null }),
           ...(position !== undefined && { position: position || null }),
-          ...(department !== undefined && { department: department || null }),
+          ...(department !== undefined && departmentIdIn === undefined && { department: department || null }),
+          ...(departmentIdIn !== undefined && {
+            departmentId: departmentIdIn,
+            ...(syncedDepartmentName !== undefined && { department: syncedDepartmentName }),
+          }),
+          ...(reportsToIdIn !== undefined && { reportsToId: reportsToIdIn }),
           ...(nextEmployeeCode !== undefined && { employeeCode: nextEmployeeCode }),
           ...profilePatch,
         },
@@ -1321,6 +1426,15 @@ router.get('/employees/:id', requirePermission('hr.employees.view'), async (req,
           orderBy: {
             createdAt: 'desc',
           },
+        },
+        departmentRef: {
+          select: { id: true, name: true, description: true, parentDepartmentId: true },
+        },
+        reportsTo: {
+          select: { id: true, fullName: true, employeeCode: true, position: true, photoUrl: true },
+        },
+        directReports: {
+          select: { id: true, fullName: true, employeeCode: true, position: true },
         },
       },
     });
