@@ -6,6 +6,60 @@ import { hashPassword } from '../core/auth/password';
 
 const router = Router();
 
+async function getOrganizationAccessibleModuleKeys(organizationId: string): Promise<Set<string>> {
+  const now = new Date();
+  const orgModules = await prisma.orgModule.findMany({
+    where: {
+      organizationId,
+      isEnabled: true,
+    },
+    include: {
+      module: {
+        select: {
+          key: true,
+        },
+      },
+    },
+  });
+
+  const moduleKeys = new Set<string>();
+  for (const orgModule of orgModules) {
+    const isExpired = orgModule.expiresAt != null && orgModule.expiresAt < now;
+    const isTrialExpired = orgModule.trialEndsAt != null && orgModule.trialEndsAt < now;
+    if (!isExpired && !isTrialExpired) {
+      moduleKeys.add(orgModule.module.key);
+    }
+  }
+
+  return moduleKeys;
+}
+
+async function getAllowedRoleKeysForOrganization(organizationId: string): Promise<Set<string>> {
+  const accessibleModuleKeys = await getOrganizationAccessibleModuleKeys(organizationId);
+  const roles = await prisma.role.findMany({
+    where: {
+      organizationId: null,
+    },
+    select: {
+      key: true,
+    },
+  });
+
+  const allowed = new Set<string>();
+  for (const role of roles) {
+    if (!role.key.includes('.')) {
+      allowed.add(role.key);
+      continue;
+    }
+    const [moduleKey] = role.key.split('.');
+    if (accessibleModuleKeys.has(moduleKey)) {
+      allowed.add(role.key);
+    }
+  }
+
+  return allowed;
+}
+
 // GET /api/users - Get all users in the organization
 router.get('/', authMiddleware, requirePermission('users.view'), async (req: Request, res: Response) => {
   try {
@@ -151,8 +205,18 @@ router.post('/', authMiddleware, requirePermission('users.create'), async (req: 
       },
     });
 
+    const allowedRoleKeys = await getAllowedRoleKeysForOrganization(req.org.id);
+
     // Assign roles if provided
     if (roleKeys && Array.isArray(roleKeys) && roleKeys.length > 0) {
+      const invalidRoleKeys = roleKeys.filter((key: string) => !allowedRoleKeys.has(key));
+      if (invalidRoleKeys.length > 0) {
+        res.status(400).json({
+          error: `Some roles are not available for this organization's subscribed modules: ${invalidRoleKeys.join(', ')}`,
+        });
+        return;
+      }
+
       const roles = await prisma.role.findMany({
         where: {
           key: { in: roleKeys },
@@ -241,6 +305,15 @@ router.put('/:id/roles', authMiddleware, requirePermission('users.manage'), asyn
 
     if (!Array.isArray(roleKeys)) {
       res.status(400).json({ error: 'roleKeys must be an array' });
+      return;
+    }
+
+    const allowedRoleKeys = await getAllowedRoleKeysForOrganization(req.org.id);
+    const invalidRoleKeys = roleKeys.filter((key: string) => !allowedRoleKeys.has(key));
+    if (invalidRoleKeys.length > 0) {
+      res.status(400).json({
+        error: `Some roles are not available for this organization's subscribed modules: ${invalidRoleKeys.join(', ')}`,
+      });
       return;
     }
 
@@ -375,6 +448,13 @@ router.delete('/:id', authMiddleware, requirePermission('users.delete'), async (
 // GET /api/users/roles - Get available roles (grouped by module)
 router.get('/roles', authMiddleware, async (req: Request, res: Response) => {
   try {
+    if (!req.org) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+
+    const accessibleModuleKeys = await getOrganizationAccessibleModuleKeys(req.org.id);
+
     const roles = await prisma.role.findMany({
       where: {
         organizationId: null, // Global roles
@@ -384,9 +464,12 @@ router.get('/roles', authMiddleware, async (req: Request, res: Response) => {
       },
     });
 
-    // Get all modules for grouping
+    // Get only modules enabled for this organization
     const modules = await prisma.module.findMany({
-      where: { isActive: true },
+      where: {
+        isActive: true,
+        key: { in: Array.from(accessibleModuleKeys) },
+      },
       orderBy: { name: 'asc' },
     });
 
@@ -454,11 +537,20 @@ router.get('/roles', authMiddleware, async (req: Request, res: Response) => {
 // GET /api/users/permissions/grouped - Get all permissions grouped by module
 router.get('/permissions/grouped', authMiddleware, async (req: Request, res: Response) => {
   try {
+    if (!req.org) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+
+    const accessibleModuleKeys = await getOrganizationAccessibleModuleKeys(req.org.id);
     const permissions = await prisma.permission.findMany({
       orderBy: { key: 'asc' },
     });
     const modules = await prisma.module.findMany({
-      where: { isActive: true },
+      where: {
+        isActive: true,
+        key: { in: Array.from(accessibleModuleKeys) },
+      },
       orderBy: { name: 'asc' },
     });
 
@@ -519,13 +611,27 @@ router.get('/permissions/grouped', authMiddleware, async (req: Request, res: Res
 // GET /api/users/permissions - Get all permissions
 router.get('/permissions', authMiddleware, async (req: Request, res: Response) => {
   try {
+    if (!req.org) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+
+    const accessibleModuleKeys = await getOrganizationAccessibleModuleKeys(req.org.id);
     const permissions = await prisma.permission.findMany({
       orderBy: {
         key: 'asc',
       },
     });
 
-    res.json(permissions.map((p) => ({
+    const filtered = permissions.filter((permission) => {
+      const [moduleKey] = permission.key.split('.');
+      if (moduleKey === 'users' || moduleKey === 'organizations') {
+        return true;
+      }
+      return accessibleModuleKeys.has(moduleKey);
+    });
+
+    res.json(filtered.map((p) => ({
       id: p.id,
       key: p.key,
       name: p.name,
