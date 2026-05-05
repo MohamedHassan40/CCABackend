@@ -359,6 +359,10 @@ async function main() {
     { key: 'hr.performance.manage', name: 'Manage Goals' },
     { key: 'hr.decisions.view', name: 'View HR Decisions' },
     { key: 'hr.decisions.create', name: 'Create Deduction Decisions' },
+    { key: 'hr.requests.view', name: 'View Employee Requests' },
+    { key: 'hr.requests.create', name: 'Create Employee Requests' },
+    { key: 'hr.requests.edit', name: 'Edit Employee Requests' },
+    { key: 'hr.requests.delete', name: 'Delete Employee Requests' },
     // Ticketing permissions
     { key: 'ticketing.tickets.view', name: 'View Tickets' },
     { key: 'ticketing.tickets.create', name: 'Create Tickets' },
@@ -706,6 +710,24 @@ async function main() {
   }
 
   console.log('✅ Assigned permissions to roles\n');
+
+  // Default org member: can open support tickets (view aggregated on employee dashboard via /api/me/workspace)
+  const ticketingCreatePerm = createdPermissions.find((p) => p.key === 'ticketing.tickets.create');
+  if (ticketingCreatePerm) {
+    await prisma.rolePermission.upsert({
+      where: {
+        roleId_permissionId: {
+          roleId: memberRole.id,
+          permissionId: ticketingCreatePerm.id,
+        },
+      },
+      update: {},
+      create: {
+        roleId: memberRole.id,
+        permissionId: ticketingCreatePerm.id,
+      },
+    });
+  }
 
   // ============================================
   // CREATE MODULE PRICES

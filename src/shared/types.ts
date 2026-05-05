@@ -100,6 +100,16 @@ export type MeResponse = {
     isExpired: boolean;
     isTrial: boolean;
   }>;
+  /** Present when this user account is linked to an HR employee record in the current org */
+  linkedEmployee?: {
+    id: string;
+    fullName: string;
+    employeeCode: string | null;
+    position: string | null;
+    photoUrl: string | null;
+    departmentId: string | null;
+    departmentName: string | null;
+  } | null;
 };
 
 export type ModuleManifestResponse = {

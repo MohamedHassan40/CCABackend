@@ -1,7 +1,8 @@
 import { Router } from 'express';
 import prisma from '../../core/db';
 import { requirePermission } from '../../middleware/permissions';
-import { createNotification, createNotificationForOrgWithPermission } from '../../core/notifications/helper';
+import { createNotification } from '../../core/notifications/helper';
+import { submitLeaveRequestForEmployee } from './leaveRequestSubmit';
 import { createAuditLog } from '../../middleware/audit';
 
 const router = Router();
@@ -327,146 +328,21 @@ router.post('/requests', requirePermission('hr.leave.create'), async (req, res) 
       return;
     }
 
-    // Verify employee belongs to org
-    const employee = await prisma.employee.findFirst({
-      where: {
-        id: employeeId,
-        orgId: req.org.id,
-      },
+    const result = await submitLeaveRequestForEmployee({
+      orgId: req.org.id,
+      employeeId,
+      leaveTypeId,
+      startDate,
+      endDate,
+      reason,
     });
 
-    if (!employee) {
-      res.status(404).json({ error: 'Employee not found' });
+    if (!result.ok) {
+      res.status(result.status).json({ error: result.error });
       return;
     }
 
-    // Verify leave type
-    const leaveType = await prisma.leaveType.findFirst({
-      where: {
-        id: leaveTypeId,
-        orgId: req.org.id,
-        isActive: true,
-      },
-    });
-
-    if (!leaveType) {
-      res.status(404).json({ error: 'Leave type not found' });
-      return;
-    }
-
-    // Calculate days
-    const start = new Date(startDate);
-    const end = new Date(endDate);
-    const now = new Date();
-    now.setHours(0, 0, 0, 0);
-
-    if (start < now) {
-      res.status(400).json({ error: 'Start date cannot be in the past' });
-      return;
-    }
-
-    const days = Math.ceil((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24)) + 1;
-
-    if (days < 1) {
-      res.status(400).json({ error: 'End date must be after or equal to start date' });
-      return;
-    }
-
-    // Check overlap with existing approved or pending leave for same employee
-    const overlapping = await prisma.leaveRequest.findFirst({
-      where: {
-        employeeId,
-        status: { in: ['pending', 'approved'] },
-        OR: [
-          { startDate: { lte: end }, endDate: { gte: start } },
-        ],
-      },
-    });
-    if (overlapping) {
-      res.status(400).json({
-        error: 'This leave period overlaps with an existing approved or pending leave request',
-      });
-      return;
-    }
-
-    // Check leave balance
-    const currentYear = new Date().getFullYear();
-    let leaveBalance = await prisma.leaveBalance.findUnique({
-      where: {
-        employeeId_leaveTypeId_year: {
-          employeeId,
-          leaveTypeId,
-          year: currentYear,
-        },
-      },
-    });
-
-    if (!leaveBalance) {
-      // Create initial balance
-      leaveBalance = await prisma.leaveBalance.create({
-        data: {
-          orgId: req.org.id,
-          employeeId,
-          leaveTypeId,
-          year: currentYear,
-          totalDays: leaveType.maxDays || 0,
-          remainingDays: leaveType.maxDays || 0,
-        },
-      });
-    }
-
-    if (leaveType.maxDays && leaveBalance.remainingDays < days) {
-      res.status(400).json({
-        error: `Insufficient leave balance. Available: ${leaveBalance.remainingDays} days, Requested: ${days} days`,
-      });
-      return;
-    }
-
-    const leaveRequest = await prisma.leaveRequest.create({
-      data: {
-        orgId: req.org.id,
-        employeeId,
-        leaveTypeId,
-        startDate: start,
-        endDate: end,
-        days,
-        reason: reason || null,
-        status: leaveType.requiresApproval ? 'pending' : 'approved',
-      },
-      include: {
-        employee: {
-          select: {
-            id: true,
-            fullName: true,
-            email: true,
-          },
-        },
-        leaveType: true,
-      },
-    });
-
-    // If auto-approved, update balance
-    if (!leaveType.requiresApproval) {
-      await prisma.leaveBalance.update({
-        where: { id: leaveBalance.id },
-        data: {
-          usedDays: leaveBalance.usedDays + days,
-          remainingDays: leaveBalance.remainingDays - days,
-        },
-      });
-    }
-
-    // Notify approvers when approval is required
-    if (leaveType.requiresApproval) {
-      createNotificationForOrgWithPermission(req.org!.id, 'hr.leave.approve', {
-        type: 'info',
-        title: 'New leave request',
-        message: `${leaveRequest.employee.fullName} requested ${days} day(s) of ${leaveRequest.leaveType.name}`,
-        link: `/dashboard/hr/leave`,
-      }).catch(() => {});
-    }
-
-    res.status(201).json(leaveRequest);
+    res.status(201).json(result.leaveRequest);
   } catch (error) {
     console.error('Error creating leave request:', error);
     res.status(500).json({ error: 'Internal server error' });

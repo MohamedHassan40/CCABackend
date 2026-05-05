@@ -36,6 +36,7 @@ router.get('/', authMiddleware, async (req: Request, res: Response) => {
         roles: [],
         permissions: [],
         enabledModules: [],
+        linkedEmployee: null,
       };
       res.json(response);
       return;
@@ -154,6 +155,34 @@ router.get('/', authMiddleware, async (req: Request, res: Response) => {
 
     const isOrgAdmin = roles.some((r) => r.key === 'owner' || r.key === 'admin');
 
+    const linkedEmpRow = await prisma.employee.findFirst({
+      where: {
+        orgId: req.org.id,
+        userId: req.user.id,
+      },
+      select: {
+        id: true,
+        fullName: true,
+        employeeCode: true,
+        position: true,
+        photoUrl: true,
+        department: true,
+        departmentRef: { select: { id: true, name: true } },
+      },
+    });
+
+    const linkedEmployee = linkedEmpRow
+      ? {
+          id: linkedEmpRow.id,
+          fullName: linkedEmpRow.fullName,
+          employeeCode: linkedEmpRow.employeeCode,
+          position: linkedEmpRow.position,
+          photoUrl: linkedEmpRow.photoUrl,
+          departmentId: linkedEmpRow.departmentRef?.id ?? null,
+          departmentName: linkedEmpRow.departmentRef?.name ?? linkedEmpRow.department ?? null,
+        }
+      : null;
+
     const response: MeResponse = {
       user: {
         id: user.id,
@@ -189,6 +218,7 @@ router.get('/', authMiddleware, async (req: Request, res: Response) => {
       isOrgAdmin,
       permissions: uniquePermissions,
       enabledModules,
+      linkedEmployee,
     };
 
     res.json(response);

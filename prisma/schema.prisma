@@ -63,6 +63,8 @@ model User {
   announcementCreatedBy  Announcement[]         @relation("AnnouncementCreatedBy")
   conversationAssignedTo Conversation[]         @relation("ConversationAssignedTo")
   absenceDeductionDecisions AbsenceDeductionDecision[] @relation("DeductionDecisionCreatedBy")
+  employeeRequestsCreated   EmployeeRequest[]          @relation("EmployeeRequestCreatedBy")
+  employeeRequestsApproved EmployeeRequest[]          @relation("EmployeeRequestApprovedBy")
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -137,6 +139,7 @@ model Organization {
   taskTrackers          TaskTracker[]
   calendarEvents        CalendarEvent[]
   absenceDeductionDecisions AbsenceDeductionDecision[]
+  employeeRequests      EmployeeRequest[]
   projectTasks          ProjectTask[]
   projectTaskTimeEntries ProjectTaskTimeEntry[]
   departments           Department[]
@@ -449,6 +452,7 @@ model Employee {
   taskTrackers         TaskTracker[]
   calendarEvents       CalendarEvent[]
   absenceDeductionDecisions AbsenceDeductionDecision[]
+  employeeRequests         EmployeeRequest[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -551,6 +555,37 @@ model LeaveBalance {
   @@unique([employeeId, leaveTypeId, year])
   @@index([orgId])
   @@index([employeeId])
+}
+
+model EmployeeRequest {
+  id              String    @id @default(cuid())
+  orgId           String
+  employeeId      String
+  requestType     String
+  title           String
+  description     String
+  priority        String    @default("medium")
+  status          String    @default("pending")
+  notes           String?
+  rejectionReason String?
+  approvedAt      DateTime?
+  rejectedAt      DateTime?
+  completedAt     DateTime?
+  createdById     String?
+  approvedById    String?
+
+  organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  employee     Employee     @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  createdBy    User?        @relation("EmployeeRequestCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  approvedBy   User?        @relation("EmployeeRequestApprovedBy", fields: [approvedById], references: [id], onDelete: SetNull)
+  attachments  File[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([orgId])
+  @@index([employeeId])
+  @@index([status])
 }
 
 // Attendance Tracking
@@ -1105,6 +1140,7 @@ model File {
   inventoryItemId String? // For inventory item images
   folderId        String? // For document management folders
   documentId      String? // For document management (main document record)
+  employeeRequestId String? // HR employee request attachments
   isVersion       Boolean @default(false) // If this is a version of a document
   versionNumber   Int? // Version number
   parentVersionId String? // Parent version ID for document versions
@@ -1117,6 +1153,7 @@ model File {
   projectDocuments ProjectDocument[] @relation("ProjectDocuments")
   documentFolder   DocumentFolder?   @relation("FolderFiles", fields: [folderId], references: [id], onDelete: SetNull)
   document         Document?         @relation("DocumentFiles", fields: [documentId], references: [id], onDelete: Cascade)
+  employeeRequest  EmployeeRequest? @relation(fields: [employeeRequestId], references: [id], onDelete: Cascade)
   parentVersion    File?             @relation("DocumentVersions", fields: [parentVersionId], references: [id], onDelete: Cascade)
   versions         File[]            @relation("DocumentVersions")
 
@@ -1131,6 +1168,7 @@ model File {
   @@index([inventoryItemId])
   @@index([folderId])
   @@index([documentId])
+  @@index([employeeRequestId])
 }
 
 // ============================================

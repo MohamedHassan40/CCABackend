@@ -7,6 +7,7 @@ import cors from 'cors';
 import { config } from './core/config';
 import authRoutes from './routes/auth';
 import meRoutes from './routes/me';
+import meEmployeePortalRoutes from './routes/meEmployeePortal';
 import superAdminRoutes from './routes/super-admin';
 import organizationRoutes from './routes/organizations';
 import publicRoutes from './routes/public';
@@ -45,6 +46,7 @@ app.get('/health', (req, res) => {
 // Routes
 app.use('/api/auth', authRoutes);
 app.use('/api/me', meRoutes);
+app.use('/api/me', meEmployeePortalRoutes);
 app.use('/api/super-admin', superAdminRoutes);
 app.use('/api/organizations', organizationRoutes);
 app.use('/api/public', publicRoutes);
