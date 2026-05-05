@@ -355,7 +355,7 @@ router.post('/card-designs', requirePermission('membership.types.create'), async
       res.status(401).json({ error: 'Unauthorized' });
       return;
     }
-    const { name, isDefault, layout, primaryColor, secondaryColor, accentColor, logoUrl, showQR, qrPosition, customCss, fontFamily } = req.body;
+    const { name, isDefault, layout, primaryColor, secondaryColor, accentColor, logoUrl, showQR, qrPosition, showMemberId, memberIdPrefix, customCss, fontFamily } = req.body;
     if (!name) {
       res.status(400).json({ error: 'Name is required' });
       return;
@@ -378,6 +378,8 @@ router.post('/card-designs', requirePermission('membership.types.create'), async
         logoUrl: logoUrl || null,
         showQR: showQR !== false,
         qrPosition: qrPosition || 'right',
+        showMemberId: showMemberId !== false,
+        memberIdPrefix: memberIdPrefix || null,
         customCss: customCss || null,
         fontFamily: fontFamily || 'sans-serif',
       },
@@ -404,7 +406,7 @@ router.put('/card-designs/:id', requirePermission('membership.types.edit'), asyn
       res.status(404).json({ error: 'Card design not found' });
       return;
     }
-    const { name, isDefault, layout, primaryColor, secondaryColor, accentColor, logoUrl, showQR, qrPosition, customCss, fontFamily } = req.body;
+    const { name, isDefault, layout, primaryColor, secondaryColor, accentColor, logoUrl, showQR, qrPosition, showMemberId, memberIdPrefix, customCss, fontFamily } = req.body;
     if (isDefault === true) {
       await prisma.membershipCardDesign.updateMany({
         where: { orgId: req.org.id },
@@ -423,6 +425,8 @@ router.put('/card-designs/:id', requirePermission('membership.types.edit'), asyn
         ...(logoUrl !== undefined && { logoUrl }),
         ...(showQR !== undefined && { showQR }),
         ...(qrPosition !== undefined && { qrPosition }),
+        ...(showMemberId !== undefined && { showMemberId }),
+        ...(memberIdPrefix !== undefined && { memberIdPrefix }),
         ...(customCss !== undefined && { customCss }),
         ...(fontFamily !== undefined && { fontFamily }),
       },

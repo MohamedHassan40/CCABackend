@@ -2104,6 +2104,8 @@ model MembershipCardDesign {
   logoUrl     String? // Optional org/membership logo URL
   showQR      Boolean  @default(true) // Whether to show QR on the card
   qrPosition  String   @default("right") // "right", "left", "bottom", "center"
+  showMemberId Boolean @default(true)
+  memberIdPrefix String?
   customCss   String? // Optional CSS overrides (sanitized on use)
   fontFamily  String?  @default("sans-serif") // e.g. "Inter", "sans-serif"
 
