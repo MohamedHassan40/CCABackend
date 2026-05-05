@@ -2036,8 +2036,10 @@ model MembershipType {
   features       Json? // JSON object with feature flags
   isActive       Boolean  @default(true)
   maxMemberships Int? // Maximum number of memberships of this type (null = unlimited)
+  cardDesignId   String? // Default digital card template for this membership tier
 
-  organization  Organization       @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  organization  Organization          @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  cardDesign    MembershipCardDesign? @relation(fields: [cardDesignId], references: [id], onDelete: SetNull)
   memberships   MemberMembership[]
   announcements Announcement[]
 
@@ -2047,6 +2049,7 @@ model MembershipType {
   @@unique([orgId, name])
   @@index([orgId])
   @@index([isActive])
+  @@index([cardDesignId])
 }
 
 model MemberMembership {
@@ -2106,6 +2109,7 @@ model MembershipCardDesign {
 
   organization Organization       @relation(fields: [orgId], references: [id], onDelete: Cascade)
   memberships  MemberMembership[]
+  membershipTypesUsingTemplate MembershipType[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

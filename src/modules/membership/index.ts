@@ -9,6 +9,7 @@ import { moduleRegistry } from '../../core/modules/registry';
 import { createAuditLog } from '../../middleware/audit';
 import { createNotificationForOrgWithPermission } from '../../core/notifications/helper';
 import type { ModuleManifest } from '@cloud-org/shared';
+import { normalizeMemberPhone } from './phone';
 
 const router = Router();
 
@@ -16,6 +17,18 @@ const frontendUrl = () => process.env.FRONTEND_URL || process.env.CLIENT_URL || 
 
 function generateQrToken(): string {
   return crypto.randomBytes(12).toString('base64url');
+}
+
+async function resolveOrgCardDesignId(orgId: string, cardDesignId: unknown): Promise<string | null> {
+  if (cardDesignId == null || cardDesignId === '') return null;
+  if (typeof cardDesignId !== 'string') return null;
+  const id = cardDesignId.trim();
+  if (!id) return null;
+  const row = await prisma.membershipCardDesign.findFirst({
+    where: { id, orgId },
+    select: { id: true },
+  });
+  return row?.id ?? null;
 }
 
 // Module manifest
@@ -107,6 +120,7 @@ router.get('/types', requirePermission('membership.types.view'), async (req: Req
         _count: {
           select: { memberships: true },
         },
+        cardDesign: { select: { id: true, name: true } },
       },
       orderBy: {
         name: 'asc',
@@ -139,6 +153,7 @@ router.get('/types/:id', requirePermission('membership.types.view'), async (req:
         _count: {
           select: { memberships: true },
         },
+        cardDesign: { select: { id: true, name: true } },
       },
     });
 
@@ -162,10 +177,16 @@ router.post('/types', requirePermission('membership.types.create'), async (req: 
       return;
     }
 
-    const { name, description, priceCents, currency, durationMonths, benefits, features, isActive, maxMemberships } = req.body;
+    const { name, description, priceCents, currency, durationMonths, benefits, features, isActive, maxMemberships, cardDesignId } = req.body;
 
     if (!name) {
       res.status(400).json({ error: 'Name is required' });
+      return;
+    }
+
+    const resolvedCardDesignId = await resolveOrgCardDesignId(req.org.id, cardDesignId);
+    if (cardDesignId != null && cardDesignId !== '' && !resolvedCardDesignId) {
+      res.status(400).json({ error: 'Card design not found' });
       return;
     }
 
@@ -181,6 +202,7 @@ router.post('/types', requirePermission('membership.types.create'), async (req: 
         features: features || null,
         isActive: isActive !== undefined ? isActive : true,
         maxMemberships: maxMemberships || null,
+        cardDesignId: resolvedCardDesignId,
       },
     });
 
@@ -219,6 +241,16 @@ router.put('/types/:id', requirePermission('membership.types.edit'), async (req:
     if (!type) {
       res.status(404).json({ error: 'Membership type not found' });
       return;
+    }
+
+    if (Object.prototype.hasOwnProperty.call(updateData, 'cardDesignId')) {
+      const raw = updateData.cardDesignId;
+      const resolved = await resolveOrgCardDesignId(req.org.id, raw);
+      if (raw != null && raw !== '' && !resolved) {
+        res.status(400).json({ error: 'Card design not found' });
+        return;
+      }
+      updateData.cardDesignId = resolved;
     }
 
     const updated = await prisma.membershipType.update({
@@ -546,7 +578,7 @@ router.get('/members/export', requirePermission('membership.members.view'), asyn
     const memberships = await prisma.memberMembership.findMany({
       where,
       include: {
-        membershipType: { select: { name: true } },
+        membershipType: { select: { id: true, name: true } },
       },
       orderBy: { createdAt: 'desc' },
       take: 10000,
@@ -559,23 +591,43 @@ router.get('/members/export', requirePermission('membership.members.view'), asyn
       return s;
     };
 
-    const headers = ['Name', 'Email', 'Phone', 'Type', 'Status', 'Start Date', 'End Date', 'Payment Status', 'Created At'];
+    // Machine-readable headers first so exported files re-import reliably (incl. after Excel round-trip).
+    const headers = [
+      'membershipTypeId',
+      'memberName',
+      'memberEmail',
+      'memberPhone',
+      'memberAddress',
+      'memberCity',
+      'memberCountry',
+      'startDate',
+      'endDate',
+      'paymentStatus',
+      'status',
+      'notes',
+      'typeName',
+    ];
     const rows = memberships.map((m) => [
+      m.membershipType.id,
       m.memberName,
       m.memberEmail,
       m.memberPhone ?? '',
-      m.membershipType.name,
-      m.status,
+      m.memberAddress ?? '',
+      m.memberCity ?? '',
+      m.memberCountry ?? '',
       m.startDate.toISOString().slice(0, 10),
       m.endDate.toISOString().slice(0, 10),
       m.paymentStatus ?? '',
-      m.createdAt.toISOString().slice(0, 10),
+      m.status,
+      m.notes ?? '',
+      m.membershipType.name,
     ]);
 
-    const csv =
+    const csvBody =
       headers.map(escape).join(',') +
       '\n' +
       rows.map((row) => row.map(escape).join(',')).join('\n');
+    const csv = `\ufeff${csvBody}`;
 
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
     res.setHeader('Content-Disposition', 'attachment; filename="members-export.csv"');
@@ -630,10 +682,16 @@ router.post('/members', requirePermission('membership.members.create'), async (r
       return;
     }
 
-    const { membershipTypeId, memberName, memberEmail, memberPhone, memberAddress, memberCity, memberCountry, startDate, endDate, paymentStatus, paymentAmount, paymentMethod, notes, cardDesignId } = req.body;
+    const { membershipTypeId, memberName, memberEmail, memberPhone, memberAddress, memberCity, memberCountry, startDate, endDate, paymentStatus, paymentAmount, paymentMethod, notes } = req.body;
 
     if (!membershipTypeId || !memberName || !memberEmail) {
       res.status(400).json({ error: 'Membership type, member name, and email are required' });
+      return;
+    }
+
+    const phoneNorm = normalizeMemberPhone(memberPhone, memberCountry);
+    if (memberPhone != null && String(memberPhone).trim() !== '' && phoneNorm.error) {
+      res.status(400).json({ error: phoneNorm.error });
       return;
     }
 
@@ -656,7 +714,7 @@ router.post('/members', requirePermission('membership.members.create'), async (r
         membershipTypeId,
         memberName,
         memberEmail,
-        memberPhone: memberPhone || null,
+        memberPhone: phoneNorm.e164,
         memberAddress: memberAddress || null,
         memberCity: memberCity || null,
         memberCountry: memberCountry || null,
@@ -668,7 +726,7 @@ router.post('/members', requirePermission('membership.members.create'), async (r
         notes: notes || null,
         createdById: req.user.id,
         qrToken: generateQrToken(),
-        cardDesignId: cardDesignId || null,
+        cardDesignId: null,
       },
       include: {
         membershipType: true,
@@ -696,6 +754,9 @@ router.put('/members/:id', requirePermission('membership.members.edit'), async (
 
     Object.keys(req.body).forEach((key) => {
       if (req.body[key] !== undefined) {
+        if (key === 'cardDesignId') {
+          return;
+        }
         if (key === 'paymentAmount') {
           updateData[key] = Math.round(req.body[key] * 100);
         } else if (key === 'startDate' || key === 'endDate') {
@@ -714,6 +775,24 @@ router.put('/members/:id', requirePermission('membership.members.edit'), async (
       res.status(404).json({ error: 'Membership not found' });
       return;
     }
+
+    const country =
+      updateData.memberCountry !== undefined ? updateData.memberCountry : membership.memberCountry;
+    const phoneTouched = Object.prototype.hasOwnProperty.call(updateData, 'memberPhone');
+    const phoneVal = phoneTouched ? updateData.memberPhone : membership.memberPhone;
+
+    if (phoneVal != null && String(phoneVal).trim() !== '') {
+      const pn = normalizeMemberPhone(String(phoneVal), country);
+      if (pn.error) {
+        res.status(400).json({ error: pn.error });
+        return;
+      }
+      updateData.memberPhone = pn.e164;
+    } else if (phoneTouched) {
+      updateData.memberPhone = null;
+    }
+
+    updateData.cardDesignId = null;
 
     const updated = await prisma.memberMembership.update({
       where: { id },
@@ -743,7 +822,9 @@ router.get('/members/:id/card', requirePermission('membership.members.view'), as
     const membership = await prisma.memberMembership.findFirst({
       where: { id, orgId: req.org.id },
       include: {
-        membershipType: true,
+        membershipType: {
+          include: { cardDesign: true },
+        },
         cardDesign: true,
         organization: { select: { name: true, slug: true } },
       },
@@ -764,8 +845,8 @@ router.get('/members/:id/card', requirePermission('membership.members.view'), as
       });
     }
 
-    // If no design assigned, use org default or a built-in default
-    let design = membership.cardDesign;
+    let design =
+      membership.membershipType.cardDesign ?? membership.cardDesign ?? null;
     if (!design) {
       design = await prisma.membershipCardDesign.findFirst({
         where: { orgId: req.org.id, isDefault: true },
@@ -965,19 +1046,33 @@ router.post('/members/bulk', requirePermission('membership.members.create'), asy
           results.errors.push({ row: i + 1, error: 'Member name and email are required' });
           continue;
         }
-        const membershipTypeId = m.membershipTypeId || m.membershipType;
-        if (!membershipTypeId) {
+
+        const bulkPhone = normalizeMemberPhone(m.memberPhone, m.memberCountry);
+        if (m.memberPhone != null && String(m.memberPhone).trim() !== '' && bulkPhone.error) {
+          results.failed++;
+          results.errors.push({ row: i + 1, error: bulkPhone.error });
+          continue;
+        }
+
+        const typeKey = m.membershipTypeId || m.membershipType || m.typeName;
+        if (!typeKey || String(typeKey).trim() === '') {
           results.failed++;
           results.errors.push({ row: i + 1, error: 'Membership type is required' });
           continue;
         }
 
-        const membershipType = await prisma.membershipType.findFirst({
-          where: { id: membershipTypeId, orgId: req.org.id },
+        const typeStr = String(typeKey).trim();
+        let membershipType = await prisma.membershipType.findFirst({
+          where: { id: typeStr, orgId: req.org.id },
         });
         if (!membershipType) {
+          membershipType = await prisma.membershipType.findFirst({
+            where: { orgId: req.org.id, name: { equals: typeStr, mode: 'insensitive' } },
+          });
+        }
+        if (!membershipType) {
           results.failed++;
-          results.errors.push({ row: i + 1, error: 'Membership type not found' });
+          results.errors.push({ row: i + 1, error: 'Membership type not found (use id or exact type name)' });
           continue;
         }
 
@@ -990,7 +1085,7 @@ router.post('/members/bulk', requirePermission('membership.members.create'), asy
             membershipTypeId: membershipType.id,
             memberName: m.memberName,
             memberEmail: m.memberEmail,
-            memberPhone: m.memberPhone || null,
+            memberPhone: bulkPhone.e164,
             memberAddress: m.memberAddress || null,
             memberCity: m.memberCity || null,
             memberCountry: m.memberCountry || null,
@@ -1002,7 +1097,7 @@ router.post('/members/bulk', requirePermission('membership.members.create'), asy
             notes: m.notes || null,
             createdById: req.user.id,
             qrToken: generateQrToken(),
-            cardDesignId: m.cardDesignId || null,
+            cardDesignId: null,
           },
         });
         results.created++;
