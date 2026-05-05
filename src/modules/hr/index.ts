@@ -334,7 +334,7 @@ export const hrManifest: ModuleManifest = {
     },
     {
       path: '/hr/organization',
-      label: 'Job structure',
+      label: 'Organization chart',
       permission: 'hr.employees.view',
     },
     {
