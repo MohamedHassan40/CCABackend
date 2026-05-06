@@ -7,7 +7,7 @@ interface QueuedEmail {
   subject: string;
   html: string;
   text?: string;
-  from?: string;
+  from?: string | { email: string; name: string };
   priority: 'high' | 'normal' | 'low';
   attempts: number;
   maxAttempts: number;

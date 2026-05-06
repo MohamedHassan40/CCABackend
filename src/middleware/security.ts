@@ -42,6 +42,16 @@ export const passwordResetRateLimiter = rateLimit({
   legacyHeaders: false,
 });
 
+/** Email one-time code requests (login / verification flows) */
+export const emailOtpRateLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000, // 1 hour
+  max: 10,
+  message: 'Too many verification code requests. Please try again later.',
+  standardHeaders: true,
+  legacyHeaders: false,
+  skip: (req) => process.env.NODE_ENV === 'test',
+});
+
 // Helmet configuration for production
 export const helmetConfig = helmet({
   contentSecurityPolicy: {

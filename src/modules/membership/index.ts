@@ -10,6 +10,7 @@ import { createAuditLog } from '../../middleware/audit';
 import { createNotificationForOrgWithPermission } from '../../core/notifications/helper';
 import type { ModuleManifest } from '@cloud-org/shared';
 import { normalizeMemberPhone } from './phone';
+import { parseImportedDate } from './importDates';
 
 const router = Router();
 
@@ -29,6 +30,65 @@ async function resolveOrgCardDesignId(orgId: string, cardDesignId: unknown): Pro
     select: { id: true },
   });
   return row?.id ?? null;
+}
+
+async function notifyMembersOfPublishedAnnouncement(
+  orgId: string,
+  ann: {
+    title: string;
+    content: string;
+    targetAudience: string;
+    specificMembershipTypeId: string | null;
+  }
+): Promise<void> {
+  try {
+    const org = await prisma.organization.findUnique({
+      where: { id: orgId },
+      select: { name: true, slug: true },
+    });
+    const base = frontendUrl().replace(/\/$/, '');
+    const optionalUrl = org?.slug ? `${base}/org/${org.slug}` : base;
+
+    const where: any = {
+      orgId,
+      status: 'active',
+      endDate: { gt: new Date() },
+    };
+    if (ann.targetAudience === 'specific_type' && ann.specificMembershipTypeId) {
+      where.membershipTypeId = ann.specificMembershipTypeId;
+    }
+
+    const rows = await prisma.memberMembership.findMany({
+      where,
+      select: { memberEmail: true },
+    });
+
+    const seen = new Set<string>();
+    const recipients: string[] = [];
+    for (const r of rows) {
+      const raw = r.memberEmail?.trim();
+      if (!raw) continue;
+      const lower = raw.toLowerCase();
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(lower)) continue;
+      if (seen.has(lower)) continue;
+      seen.add(lower);
+      recipients.push(raw);
+    }
+
+    const { sendEmailQueued, emailTemplates } = await import('../../core/email');
+
+    for (const to of recipients) {
+      const tpl = emailTemplates.membershipAnnouncement(
+        org?.name ?? 'Organization',
+        ann.title,
+        ann.content,
+        optionalUrl
+      );
+      await sendEmailQueued({ to, subject: tpl.subject, html: tpl.html, priority: 'normal' });
+    }
+  } catch (e) {
+    console.error('notifyMembersOfPublishedAnnouncement:', e);
+  }
 }
 
 // Module manifest
@@ -588,10 +648,20 @@ router.get('/members/export', requirePermission('membership.members.view'), asyn
       take: 10000,
     });
 
+    const delimParam = String(req.query.delimiter ?? '').toLowerCase();
+    let delimiter = ',';
+    if (delimParam === 'semicolon' || delimParam === ';' || delimParam === 'excel') delimiter = ';';
+    else if (delimParam === 'tab') delimiter = '\t';
+
     const escape = (v: string | number | null | undefined) => {
       if (v == null) return '';
       const s = String(v);
-      if (/[",\n\r]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+      const needsQuote =
+        /["\n\r]/.test(s) ||
+        (delimiter === ',' && s.includes(',')) ||
+        (delimiter === ';' && s.includes(';')) ||
+        (delimiter === '\t' && s.includes('\t'));
+      if (needsQuote) return `"${s.replace(/"/g, '""')}"`;
       return s;
     };
 
@@ -628,13 +698,16 @@ router.get('/members/export', requirePermission('membership.members.view'), asyn
     ]);
 
     const csvBody =
-      headers.map(escape).join(',') +
+      headers.map(escape).join(delimiter) +
       '\n' +
-      rows.map((row) => row.map(escape).join(',')).join('\n');
+      rows.map((row) => row.map(escape).join(delimiter)).join('\n');
     const csv = `\ufeff${csvBody}`;
 
+    const filename =
+      delimiter === ';' ? 'members-export-excel.csv' : delimiter === '\t' ? 'members-export.tsv' : 'members-export.csv';
+
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
-    res.setHeader('Content-Disposition', 'attachment; filename="members-export.csv"');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
     res.send(csv);
   } catch (error: any) {
     console.error('Error exporting members:', error);
@@ -686,10 +759,31 @@ router.post('/members', requirePermission('membership.members.create'), async (r
       return;
     }
 
-    const { membershipTypeId, memberName, memberEmail, memberPhone, memberAddress, memberCity, memberCountry, startDate, endDate, paymentStatus, paymentAmount, paymentMethod, notes } = req.body;
+    const {
+      membershipTypeId,
+      memberName,
+      memberEmail,
+      memberPhone,
+      memberAddress,
+      memberCity,
+      memberCountry,
+      startDate,
+      endDate,
+      paymentStatus,
+      paymentAmount,
+      paymentMethod,
+      notes,
+      cardDesignId,
+    } = req.body;
 
     if (!membershipTypeId || !memberName || !memberEmail) {
       res.status(400).json({ error: 'Membership type, member name, and email are required' });
+      return;
+    }
+
+    const resolvedMemberCard = await resolveOrgCardDesignId(req.org.id, cardDesignId);
+    if (cardDesignId != null && cardDesignId !== '' && !resolvedMemberCard) {
+      res.status(400).json({ error: 'Card design not found' });
       return;
     }
 
@@ -710,7 +804,9 @@ router.post('/members', requirePermission('membership.members.create'), async (r
     }
 
     const start = startDate ? new Date(startDate) : new Date();
-    const end = endDate ? new Date(endDate) : new Date(start.getTime() + membershipType.durationMonths * 30 * 24 * 60 * 60 * 1000);
+    const end = endDate
+      ? new Date(endDate)
+      : new Date(start.getTime() + membershipType.durationMonths * 30 * 24 * 60 * 60 * 1000);
 
     const membership = await prisma.memberMembership.create({
       data: {
@@ -730,7 +826,7 @@ router.post('/members', requirePermission('membership.members.create'), async (r
         notes: notes || null,
         createdById: req.user.id,
         qrToken: generateQrToken(),
-        cardDesignId: null,
+        cardDesignId: resolvedMemberCard,
       },
       include: {
         membershipType: true,
@@ -796,7 +892,14 @@ router.put('/members/:id', requirePermission('membership.members.edit'), async (
       updateData.memberPhone = null;
     }
 
-    updateData.cardDesignId = null;
+    if (Object.prototype.hasOwnProperty.call(req.body, 'cardDesignId')) {
+      const resolvedCard = await resolveOrgCardDesignId(req.org.id, req.body.cardDesignId);
+      if (req.body.cardDesignId != null && req.body.cardDesignId !== '' && !resolvedCard) {
+        res.status(400).json({ error: 'Card design not found' });
+        return;
+      }
+      updateData.cardDesignId = resolvedCard;
+    }
 
     const updated = await prisma.memberMembership.update({
       where: { id },
@@ -1080,8 +1183,27 @@ router.post('/members/bulk', requirePermission('membership.members.create'), asy
           continue;
         }
 
-        const start = m.startDate ? new Date(m.startDate) : new Date();
-        const end = m.endDate ? new Date(m.endDate) : new Date(start.getTime() + membershipType.durationMonths * 30 * 24 * 60 * 60 * 1000);
+        let start: Date | null = null;
+        if (m.startDate != null && String(m.startDate).trim() !== '') {
+          start = parseImportedDate(m.startDate);
+          if (!start) {
+            results.failed++;
+            results.errors.push({ row: i + 1, error: 'Invalid start date (use YYYY-MM-DD or Excel date)' });
+            continue;
+          }
+        }
+        if (!start) start = new Date();
+
+        let end: Date | null = null;
+        if (m.endDate != null && String(m.endDate).trim() !== '') {
+          end = parseImportedDate(m.endDate);
+          if (!end) {
+            results.failed++;
+            results.errors.push({ row: i + 1, error: 'Invalid end date (use YYYY-MM-DD or Excel date)' });
+            continue;
+          }
+        }
+        if (!end) end = new Date(start.getTime() + membershipType.durationMonths * 30 * 24 * 60 * 60 * 1000);
 
         await prisma.memberMembership.create({
           data: {
@@ -1337,6 +1459,15 @@ router.post('/announcements', requirePermission('membership.announcements.create
       },
     });
 
+    if (announcement.isPublished) {
+      void notifyMembersOfPublishedAnnouncement(req.org.id, {
+        title: announcement.title,
+        content: announcement.content,
+        targetAudience: announcement.targetAudience,
+        specificMembershipTypeId: announcement.specificMembershipTypeId,
+      });
+    }
+
     res.status(201).json(announcement);
   } catch (error: any) {
     console.error('Error creating announcement:', error);
@@ -1377,6 +1508,8 @@ router.put('/announcements/:id', requirePermission('membership.announcements.edi
       return;
     }
 
+    const wasPublished = announcement.isPublished;
+
     const updated = await prisma.announcement.update({
       where: { id },
       data: updateData,
@@ -1387,6 +1520,15 @@ router.put('/announcements/:id', requirePermission('membership.announcements.edi
         },
       },
     });
+
+    if (updated.isPublished && !wasPublished) {
+      void notifyMembersOfPublishedAnnouncement(req.org.id, {
+        title: updated.title,
+        content: updated.content,
+        targetAudience: updated.targetAudience,
+        specificMembershipTypeId: updated.specificMembershipTypeId,
+      });
+    }
 
     res.json(updated);
   } catch (error: any) {

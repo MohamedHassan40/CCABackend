@@ -1,13 +1,23 @@
 import { Router, Request, Response } from 'express';
+import crypto from 'crypto';
 import prisma from '../core/db';
 import { hashPassword, verifyPassword } from '../core/auth/password';
 import { signToken } from '../core/auth/jwt';
 import { config } from '../core/config';
-import { authRateLimiter, passwordResetRateLimiter } from '../middleware/security';
+import { authRateLimiter, passwordResetRateLimiter, emailOtpRateLimiter } from '../middleware/security';
 import { validateInput, validators } from '../middleware/validation';
 import type { AuthResponse } from '@cloud-org/shared';
 
 const router = Router();
+
+const EMAIL_OTP_VALID_MINUTES = 10;
+
+function otpCodesEqual(stored: string, provided: string): boolean {
+  const a = Buffer.from(String(stored).trim(), 'utf8');
+  const b = Buffer.from(String(provided).trim(), 'utf8');
+  if (a.length !== b.length || a.length === 0) return false;
+  return crypto.timingSafeEqual(a, b);
+}
 
 // Helper to create slug from name
 function createSlug(name: string): string {
@@ -74,35 +84,17 @@ router.post('/register', async (req: Request, res: Response) => {
       // Seed default modules with trial
       await seedDefaultModules(org.id);
 
-      // Send welcome email (async, non-blocking)
       const { sendEmailQueued, emailTemplates } = await import('../core/email');
       const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
       const loginUrl = `${frontendUrl}/auth/login`;
-      
+      const reg = emailTemplates.registrationComplete(user.name || 'User', org.name, loginUrl);
       sendEmailQueued({
         to: user.email,
-        subject: `Welcome to Cloud Org, ${user.name || 'User'}!`,
-        html: emailTemplates.welcomeEmail(
-          user.name || 'User',
-          org.name,
-          loginUrl
-        ).html,
+        subject: reg.subject,
+        html: reg.html,
         priority: 'high',
       }).catch((err) => {
-        console.error('Failed to queue welcome email:', err);
-      });
-
-      sendEmailQueued({
-        to: user.email,
-        subject: `Your organization "${org.name}" is ready!`,
-        html: emailTemplates.organizationCreated(
-          org.name,
-          user.email,
-          loginUrl
-        ).html,
-        priority: 'normal',
-      }).catch((err) => {
-        console.error('Failed to queue organization email:', err);
+        console.error('Failed to queue registration email:', err);
       });
 
       const token = createAuthToken(user, org.id);
@@ -138,36 +130,17 @@ router.post('/register', async (req: Request, res: Response) => {
     // Seed default modules with trial
     await seedDefaultModules(org.id);
 
-    // Send welcome email (async, non-blocking)
     const { sendEmailQueued, emailTemplates } = await import('../core/email');
     const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
     const loginUrl = `${frontendUrl}/auth/login`;
-    
+    const reg = emailTemplates.registrationComplete(user.name || 'User', org.name, loginUrl);
     sendEmailQueued({
       to: user.email,
-      subject: `Welcome to Cloud Org, ${user.name || 'User'}!`,
-      html: emailTemplates.welcomeEmail(
-        user.name || 'User',
-        org.name,
-        loginUrl
-      ).html,
+      subject: reg.subject,
+      html: reg.html,
       priority: 'high',
     }).catch((err) => {
-      console.error('Failed to queue welcome email:', err);
-    });
-
-    // Send organization created email
-    sendEmailQueued({
-      to: user.email,
-      subject: `Your organization "${org.name}" is ready!`,
-      html: emailTemplates.organizationCreated(
-        org.name,
-        user.email,
-        loginUrl
-      ).html,
-      priority: 'normal',
-    }).catch((err) => {
-      console.error('Failed to queue organization email:', err);
+      console.error('Failed to queue registration email:', err);
     });
 
     const token = createAuthToken(user, org.id);
@@ -341,8 +314,6 @@ router.post('/forgot-password',
       return;
     }
 
-    // Generate reset token
-    const crypto = await import('crypto');
     const resetToken = crypto.randomBytes(32).toString('hex');
     const resetExpires = new Date();
     resetExpires.setHours(resetExpires.getHours() + 1); // Token expires in 1 hour
@@ -356,26 +327,14 @@ router.post('/forgot-password',
       },
     });
 
-    // Send reset email
-    const { sendEmail } = await import('../core/email');
     const resetUrl = `${process.env.FRONTEND_URL || 'http://localhost:3000'}/auth/reset-password?token=${resetToken}`;
 
+    const { sendEmail, emailTemplates } = await import('../core/email');
+    const resetTpl = emailTemplates.passwordReset(user.name || 'User', resetUrl);
     await sendEmail({
       to: user.email,
-      subject: 'Password Reset Request',
-      html: `
-        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-          <h2>Password Reset Request</h2>
-          <p>Hello ${user.name || 'User'},</p>
-          <p>You requested to reset your password. Click the link below to reset it:</p>
-          <p><a href="${resetUrl}" style="background-color: #000063; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px; display: inline-block;">Reset Password</a></p>
-          <p>Or copy and paste this URL into your browser:</p>
-          <p style="word-break: break-all;">${resetUrl}</p>
-          <p>This link will expire in 1 hour.</p>
-          <p>If you didn't request this, please ignore this email.</p>
-          <p>Best regards,<br>Cloud Org Team</p>
-        </div>
-      `,
+      subject: resetTpl.subject,
+      html: resetTpl.html,
     });
 
     res.json({ message: 'If an account exists with this email, a password reset link has been sent.' });
@@ -440,6 +399,109 @@ router.post('/reset-password',
     res.status(500).json({ error: 'Internal server error' });
   }
 });
+
+// POST /api/auth/email-otp/send — email a short-lived verification code (e.g. MFA / step-up)
+router.post(
+  '/email-otp/send',
+  emailOtpRateLimiter,
+  validateInput({
+    body: {
+      email: (v) => validators.required(v) && validators.email(v),
+    },
+  }),
+  async (req: Request, res: Response) => {
+    try {
+      const email = String(req.body.email).toLowerCase().trim();
+      const generic = {
+        message: 'If an account exists for this email, a verification code has been sent.',
+      };
+
+      const user = await prisma.user.findUnique({
+        where: { email },
+      });
+
+      if (!user?.isActive) {
+        res.json(generic);
+        return;
+      }
+
+      const code = String(crypto.randomInt(100000, 1000000));
+      const expiresAt = new Date(Date.now() + EMAIL_OTP_VALID_MINUTES * 60 * 1000);
+
+      await prisma.user.update({
+        where: { id: user.id },
+        data: {
+          emailOtpCode: code,
+          emailOtpExpiresAt: expiresAt,
+        },
+      });
+
+      const { sendEmail, emailTemplates } = await import('../core/email');
+      const displayName = user.name?.trim() || user.email.split('@')[0] || 'User';
+      const tpl = emailTemplates.emailOtp(displayName, code, EMAIL_OTP_VALID_MINUTES);
+
+      await sendEmail({
+        to: user.email,
+        subject: tpl.subject,
+        html: tpl.html,
+      });
+
+      res.json(generic);
+    } catch (error) {
+      console.error('Email OTP send error:', error);
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  }
+);
+
+// POST /api/auth/email-otp/verify — validate code (clears OTP on success)
+router.post(
+  '/email-otp/verify',
+  emailOtpRateLimiter,
+  validateInput({
+    body: {
+      email: (v) => validators.required(v) && validators.email(v),
+      code: (v) => validators.required(v),
+    },
+  }),
+  async (req: Request, res: Response) => {
+    try {
+      const email = String(req.body.email).toLowerCase().trim();
+      const code = String(req.body.code).trim();
+
+      const user = await prisma.user.findUnique({
+        where: { email },
+      });
+
+      if (
+        !user?.emailOtpCode ||
+        !user.emailOtpExpiresAt ||
+        user.emailOtpExpiresAt < new Date()
+      ) {
+        res.status(400).json({ error: 'Invalid or expired code' });
+        return;
+      }
+
+      if (!otpCodesEqual(user.emailOtpCode, code)) {
+        res.status(400).json({ error: 'Invalid or expired code' });
+        return;
+      }
+
+      await prisma.user.update({
+        where: { id: user.id },
+        data: {
+          emailOtpCode: null,
+          emailOtpExpiresAt: null,
+        },
+      });
+
+      res.json({ verified: true });
+    } catch (error) {
+      console.error('Email OTP verify error:', error);
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  }
+);
 
 // POST /api/auth/switch-organization - Switch to a different organization
 router.post('/switch-organization', authRateLimiter, async (req: Request, res: Response) => {

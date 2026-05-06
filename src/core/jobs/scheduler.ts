@@ -4,6 +4,7 @@
 import cron from 'node-cron';
 import { checkAndRenewSubscriptions } from './subscription-renewal';
 import { checkAndProcessTrials } from './trial-expiry';
+import { checkModuleAccessExpiry } from './module-access-expiry';
 import { captureMessage } from '../errorTracking';
 
 let isRunning = false;
@@ -55,6 +56,23 @@ export function startScheduledJobs(): void {
     } catch (error: any) {
       console.error('Error in trial expiry job:', error);
       captureMessage(`Trial expiry job failed: ${error.message}`, 'error');
+    }
+  });
+
+  // Dated module access (expiresAt) reminders daily at 3:30 AM
+  cron.schedule('30 3 * * *', async () => {
+    try {
+      console.log('Running module access expiry check...');
+      const result = await checkModuleAccessExpiry();
+      console.log(
+        `Module access expiry: ${result.processed} processed, ${result.notified} notified, ${result.disabled} disabled, ${result.errors} errors`
+      );
+      if (result.errors > 0) {
+        captureMessage(`Module access expiry: ${result.errors} errors`, 'warning');
+      }
+    } catch (error: any) {
+      console.error('Error in module access expiry job:', error);
+      captureMessage(`Module access expiry job failed: ${error.message}`, 'error');
     }
   });
 

@@ -24,6 +24,8 @@ model User {
   isSuperAdmin         Boolean   @default(false) // platform-level super admin
   passwordResetToken   String? // Token for password reset
   passwordResetExpires DateTime? // Expiration date for reset token
+  emailOtpCode         String? // Short-lived one-time code (e.g. login / verification)
+  emailOtpExpiresAt    DateTime?
 
   memberships            Membership[]
   createdTickets         Ticket[]               @relation("CreatedBy")

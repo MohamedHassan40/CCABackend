@@ -244,6 +244,44 @@ app.post('/api/billing/payment-callback',
       }
     }
 
+    try {
+      const [orgRec, moduleRec] = await Promise.all([
+        prisma.organization.findUnique({
+          where: { id: orgId },
+          include: {
+            memberships: {
+              where: { isActive: true },
+              include: { user: true },
+              take: 1,
+            },
+          },
+        }),
+        prisma.module.findUnique({ where: { id: moduleId } }),
+      ]);
+      const owner = orgRec?.memberships?.[0]?.user;
+      if (owner?.email && moduleRec && orgRec) {
+        const halalas = typeof invoice.amount === 'number' ? invoice.amount : 0;
+        const amountLabel = `${(halalas / 100).toFixed(2)} SAR`;
+        const billingUrl = `${process.env.FRONTEND_URL || 'http://localhost:3000'}/dashboard/billing/subscriptions`;
+        const { sendEmailQueued, emailTemplates } = await import('./core/email');
+        const tpl = emailTemplates.purchaseConfirmation({
+          userName: owner.name || owner.email.split('@')[0] || 'User',
+          orgName: orgRec.name,
+          moduleName: moduleRec.name,
+          amountLabel,
+          billingUrl,
+        });
+        sendEmailQueued({
+          to: owner.email,
+          subject: tpl.subject,
+          html: tpl.html,
+          priority: 'high',
+        }).catch((err) => console.error('Purchase confirmation email failed:', err));
+      }
+    } catch (emailErr) {
+      console.error('Purchase confirmation email:', emailErr);
+    }
+
     res.json({ success: true, subscription });
   } catch (error) {
     console.error('Payment callback error:', error);
