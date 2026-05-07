@@ -24,7 +24,7 @@ export async function checkModuleAccessExpiry(): Promise<ModuleAccessExpiryResul
 
   const now = new Date();
   const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
-  const renewUrl = `${frontendUrl}/dashboard/billing/modules`;
+  const renewUrl = `${frontendUrl}/dashboard/subscription/modules`;
 
   const orgModules = await prisma.orgModule.findMany({
     where: {

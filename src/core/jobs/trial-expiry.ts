@@ -118,7 +118,7 @@ async function sendTrialExpiryNotification(orgModule: any, daysLeft: number): Pr
   if (!owner) return;
 
   const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
-  const subscribeUrl = `${frontendUrl}/dashboard/billing/modules`;
+  const subscribeUrl = `${frontendUrl}/dashboard/subscription/modules`;
 
   const tpl = emailTemplates.trialExpiring(
     orgModule.organization.name,
@@ -160,7 +160,7 @@ async function disableExpiredTrial(orgModule: any): Promise<void> {
       html: emailTemplates.trialExpired(
         orgModule.organization.name,
         orgModule.module.name,
-        `${frontendUrl}/dashboard/billing/modules`
+        `${frontendUrl}/dashboard/subscription/modules`
       ).html,
     });
   }

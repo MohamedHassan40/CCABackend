@@ -32,11 +32,14 @@ async function main() {
 
   const billingModule = await prisma.module.upsert({
     where: { key: 'billing' },
-    update: {},
+    update: {
+      name: 'Billing',
+      description: 'Customer invoices and receivables for your organization (optional module)',
+    },
     create: {
       key: 'billing',
-      name: 'Billing & Subscriptions',
-      description: 'Billing and subscription management',
+      name: 'Billing',
+      description: 'Customer invoices and receivables for your organization (optional module)',
       isActive: true,
     },
   });
@@ -368,9 +371,11 @@ async function main() {
     { key: 'ticketing.tickets.create', name: 'Create Tickets' },
     { key: 'ticketing.tickets.edit', name: 'Edit Tickets' },
     { key: 'ticketing.tickets.delete', name: 'Delete Tickets' },
-    // Billing permissions
-    { key: 'billing.subscriptions.view', name: 'View Subscriptions' },
-    { key: 'billing.subscriptions.manage', name: 'Manage Subscriptions' },
+    // Platform subscriptions (CCA module licensing — not the org Billing module)
+    { key: 'subscriptions.view', name: 'View Platform Subscriptions' },
+    { key: 'subscriptions.manage', name: 'Manage Platform Subscriptions' },
+    // Org Billing module (optional)
+    { key: 'billing.workspace.view', name: 'View Organization Billing Workspace' },
     // Marketplace permissions
     { key: 'marketplace.products.view', name: 'View Products' },
     { key: 'marketplace.products.create', name: 'Create Products' },
@@ -518,9 +523,9 @@ async function main() {
     });
   }
 
-  // Assign most permissions to admin role (except billing.manage)
+  // Assign most permissions to admin role (except platform subscription management)
   for (const perm of createdPermissions) {
-    if (perm.key !== 'billing.subscriptions.manage') {
+    if (perm.key !== 'subscriptions.manage') {
       await prisma.rolePermission.upsert({
         where: {
           roleId_permissionId: {

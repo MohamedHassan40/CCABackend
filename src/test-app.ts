@@ -20,6 +20,7 @@ import analyticsRoutes from './routes/analytics';
 import { registerHrModule } from './modules/hr';
 import { registerTicketingModule } from './modules/ticketing';
 import { registerBillingModule } from './modules/billing';
+import { registerSubscriptionsModule } from './modules/subscriptions';
 import { registerMarketplaceModule } from './modules/marketplace';
 import { securityHeaders } from './middleware/security';
 
@@ -61,6 +62,7 @@ app.use('/api/analytics', analyticsRoutes);
 const mainRouter = express.Router();
 registerHrModule(mainRouter);
 registerTicketingModule(mainRouter);
+registerSubscriptionsModule(mainRouter);
 registerBillingModule(mainRouter);
 registerMarketplaceModule(mainRouter);
 app.use(mainRouter);

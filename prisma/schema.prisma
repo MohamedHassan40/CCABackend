@@ -157,6 +157,13 @@ model Organization {
   /// HR: when true, employee IDs follow the org scheme only (no manual edits)
   employeeIdSchemeLocked Boolean @default(false)
 
+  /// Membership module: prefix for member-facing membership numbers (e.g. MEM → MEM-00001)
+  membershipNumberPrefix    String?
+  /// Zero-padding width for the numeric part (default applied in app when null)
+  membershipNumberPadLength Int?    @default(5)
+  /// Next sequence number to assign when creating a MemberMembership
+  membershipNumberNextSeq   Int     @default(1)
+
   @@index([status])
   @@index([isActive])
 }
@@ -2113,6 +2120,8 @@ model MemberMembership {
   createdById      String // User who created this membership
   qrToken          String?   @unique // Unique token for QR code verification URL
   cardDesignId     String? // Optional: which card design template to use for this member
+  /// Org-scoped sequential number; formatted with Organization.membershipNumberPrefix on cards
+  membershipSeq    Int?
 
   organization   Organization         @relation(fields: [orgId], references: [id], onDelete: Cascade)
   membershipType MembershipType       @relation(fields: [membershipTypeId], references: [id], onDelete: Cascade)
@@ -2129,6 +2138,7 @@ model MemberMembership {
   @@index([memberEmail])
   @@index([endDate])
   @@index([qrToken])
+  @@index([orgId, membershipSeq])
 }
 
 // Customizable designs for digital membership cards and QR display

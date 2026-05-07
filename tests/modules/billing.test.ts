@@ -5,41 +5,37 @@ import {
   createTestOrganization,
   createTestMembership,
   createTestModule,
-  enableModuleForOrg,
   ensureDefaultRoles,
 } from '../utils/database';
 import prisma from '../../src/core/db';
 
-describe('Billing Module', () => {
+describe('Platform subscriptions API', () => {
   let api: ApiClient;
   let user: any;
   let org: any;
 
   beforeEach(async () => {
     api = new ApiClient();
-    
+
     user = await createTestUser();
     org = await createTestOrganization();
     await ensureDefaultRoles(org.id);
     await createTestMembership(user.id, org.id, { roleKeys: ['owner'] });
-    
-    // Create billing permission (Permission model doesn't have moduleId)
-    const billingModule = await createTestModule({ key: 'billing', name: 'Billing' });
+
     const permission = await prisma.permission.upsert({
-      where: { key: 'billing.subscriptions.view' },
+      where: { key: 'subscriptions.view' },
       update: {},
       create: {
-        key: 'billing.subscriptions.view',
-        name: 'View Subscriptions',
+        key: 'subscriptions.view',
+        name: 'View Platform Subscriptions',
       },
     });
-    
+
     const ownerRole = await prisma.role.findUnique({
       where: { key: 'owner' },
     });
-    
+
     if (ownerRole) {
-      // Check if already exists (use findFirst since there's no explicit unique constraint name)
       const existing = await prisma.rolePermission.findFirst({
         where: {
           roleId: ownerRole.id,
@@ -56,29 +52,27 @@ describe('Billing Module', () => {
         });
       }
     }
-    
+
     api.setAuth(user.id, org.id);
   });
 
-  describe('GET /api/billing/modules', () => {
+  describe('GET /api/subscriptions/modules', () => {
     it('should return available modules', async () => {
-      // Create some test modules
-      const hrModule = await createTestModule({ key: 'hr', name: 'HR Module' });
-      const ticketingModule = await createTestModule({ key: 'ticketing', name: 'Ticketing Module' });
+      await createTestModule({ key: 'hr', name: 'HR Module' });
+      await createTestModule({ key: 'ticketing', name: 'Ticketing Module' });
 
-      const response = await api.get('/api/billing/modules');
-      
+      const response = await api.get('/api/subscriptions/modules');
+
       expect(response.status).toBe(200);
       expect(Array.isArray(response.body)).toBe(true);
       expect(response.body.length).toBeGreaterThan(0);
     });
   });
 
-  describe('GET /api/billing/subscriptions', () => {
+  describe('GET /api/subscriptions/subscriptions', () => {
     it('should return organization subscriptions', async () => {
       const module = await createTestModule({ key: 'hr', name: 'HR Module' });
-      
-      // Create a subscription
+
       await prisma.subscription.create({
         data: {
           organizationId: org.id,
@@ -90,10 +84,9 @@ describe('Billing Module', () => {
         },
       });
 
-      const response = await api.get('/api/billing/subscriptions');
-      
+      const response = await api.get('/api/subscriptions/subscriptions');
+
       expect(response.status).toBe(200);
-      // Response is an object with subscriptions and orgModules arrays
       expect(response.body).toHaveProperty('subscriptions');
       expect(response.body).toHaveProperty('orgModules');
       expect(Array.isArray(response.body.subscriptions)).toBe(true);
@@ -101,4 +94,3 @@ describe('Billing Module', () => {
     });
   });
 });
-

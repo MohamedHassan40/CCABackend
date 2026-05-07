@@ -205,9 +205,9 @@ async function attemptRenewal(subscription: any): Promise<RenewalResult> {
             subscriptionId: subscription.id,
             isRenewal: true,
           },
-          success_url: `${frontendUrl}/dashboard/billing/subscriptions?renewal=success`,
-          back_url: `${frontendUrl}/dashboard/billing/subscriptions`,
-          callback_url: `${apiUrl}/api/billing/payment-callback`,
+          success_url: `${frontendUrl}/dashboard/subscription?renewal=success`,
+          back_url: `${frontendUrl}/dashboard/subscription`,
+          callback_url: `${apiUrl}/api/subscriptions/payment-callback`,
           expired_at: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(), // 7 days
         });
 
@@ -235,7 +235,7 @@ async function attemptRenewal(subscription: any): Promise<RenewalResult> {
               subscription.organization.name,
               subscription.module.name,
               `${modulePrice.priceCents / 100} ${modulePrice.currency}`,
-              `${frontendUrl}/dashboard/billing/subscriptions`
+              `${frontendUrl}/dashboard/subscription`
             ).html,
           });
         }

@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import crypto from 'crypto';
 import QRCode from 'qrcode';
+import { Prisma } from '@prisma/client';
 import prisma from '../../core/db';
 import { authMiddleware } from '../../middleware/auth';
 import { requireModuleEnabled } from '../../middleware/modules';
@@ -18,6 +19,33 @@ const frontendUrl = () => process.env.FRONTEND_URL || process.env.CLIENT_URL || 
 
 function generateQrToken(): string {
   return crypto.randomBytes(12).toString('base64url');
+}
+
+/** Display form: PREFIX-00001 or padded digits only when prefix is empty */
+function formatMembershipNumber(
+  prefix: string | null | undefined,
+  padLength: number | null | undefined,
+  seq: number | null | undefined
+): string | null {
+  if (seq == null) return null;
+  const pad = Math.min(Math.max(padLength ?? 5, 1), 12);
+  const num = String(seq).padStart(pad, '0');
+  const p = (prefix ?? '').trim();
+  if (!p) return num;
+  return `${p}-${num}`;
+}
+
+async function allocateMembershipSeq(tx: Prisma.TransactionClient, orgId: string): Promise<number> {
+  const orgRow = await tx.organization.findUnique({
+    where: { id: orgId },
+    select: { membershipNumberNextSeq: true },
+  });
+  const seq = orgRow?.membershipNumberNextSeq ?? 1;
+  await tx.organization.update({
+    where: { id: orgId },
+    data: { membershipNumberNextSeq: seq + 1 },
+  });
+  return seq;
 }
 
 async function resolveOrgCardDesignId(orgId: string, cardDesignId: unknown): Promise<string | null> {
@@ -522,6 +550,81 @@ router.delete('/card-designs/:id', requirePermission('membership.types.delete'),
 });
 
 // ============================================
+// MEMBERSHIP MODULE SETTINGS (org-wide numbers)
+// ============================================
+
+// GET /api/membership/settings
+router.get('/settings', requirePermission('membership.members.view'), async (req: Request, res: Response) => {
+  try {
+    if (!req.org) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+    const org = await prisma.organization.findUnique({
+      where: { id: req.org.id },
+      select: {
+        membershipNumberPrefix: true,
+        membershipNumberPadLength: true,
+        membershipNumberNextSeq: true,
+      },
+    });
+    res.json(
+      org ?? {
+        membershipNumberPrefix: null,
+        membershipNumberPadLength: 5,
+        membershipNumberNextSeq: 1,
+      }
+    );
+  } catch (error: any) {
+    console.error('Error fetching membership settings:', error);
+    res.status(500).json({ error: error.message || 'Internal server error' });
+  }
+});
+
+// PUT /api/membership/settings
+router.put('/settings', requirePermission('membership.types.edit'), async (req: Request, res: Response) => {
+  try {
+    if (!req.org) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+    const { membershipNumberPrefix, membershipNumberPadLength } = req.body;
+    const padRaw = membershipNumberPadLength;
+    const pad =
+      padRaw !== undefined && padRaw !== null && padRaw !== ''
+        ? Math.min(Math.max(parseInt(String(padRaw), 10) || 5, 1), 12)
+        : undefined;
+
+    const prefixData =
+      membershipNumberPrefix !== undefined
+        ? {
+            membershipNumberPrefix:
+              membershipNumberPrefix === null || String(membershipNumberPrefix).trim() === ''
+                ? null
+                : String(membershipNumberPrefix).trim(),
+          }
+        : {};
+
+    const updated = await prisma.organization.update({
+      where: { id: req.org.id },
+      data: {
+        ...prefixData,
+        ...(pad !== undefined ? { membershipNumberPadLength: pad } : {}),
+      },
+      select: {
+        membershipNumberPrefix: true,
+        membershipNumberPadLength: true,
+        membershipNumberNextSeq: true,
+      },
+    });
+    res.json(updated);
+  } catch (error: any) {
+    console.error('Error updating membership settings:', error);
+    res.status(500).json({ error: error.message || 'Internal server error' });
+  }
+});
+
+// ============================================
 // MEMBERSHIPS
 // ============================================
 
@@ -561,11 +664,16 @@ router.get('/members', requirePermission('membership.members.view'), async (req:
     }
 
     if (search) {
+      const q = search as string;
+      const seqGuess = /^\d+$/.test(q.trim()) ? parseInt(q.trim(), 10) : NaN;
       where.OR = [
-        { memberName: { contains: search as string, mode: 'insensitive' } },
-        { memberEmail: { contains: search as string, mode: 'insensitive' } },
-        { memberPhone: { contains: search as string, mode: 'insensitive' } },
+        { memberName: { contains: q, mode: 'insensitive' } },
+        { memberEmail: { contains: q, mode: 'insensitive' } },
+        { memberPhone: { contains: q, mode: 'insensitive' } },
       ];
+      if (!Number.isNaN(seqGuess)) {
+        where.OR.push({ membershipSeq: seqGuess });
+      }
     }
 
     const [memberships, total] = await Promise.all([
@@ -599,7 +707,21 @@ router.get('/members', requirePermission('membership.members.view'), async (req:
       }
     }
 
-    res.json({ data: memberships, total, limit, offset: skip });
+    const orgFmt = await prisma.organization.findUnique({
+      where: { id: req.org.id },
+      select: { membershipNumberPrefix: true, membershipNumberPadLength: true },
+    });
+
+    const data = memberships.map((m) => ({
+      ...m,
+      membershipNumber: formatMembershipNumber(
+        orgFmt?.membershipNumberPrefix,
+        orgFmt?.membershipNumberPadLength,
+        m.membershipSeq
+      ),
+    }));
+
+    res.json({ data, total, limit, offset: skip });
   } catch (error: any) {
     console.error('Error fetching memberships:', error);
     res.status(500).json({ error: error.message || 'Internal server error' });
@@ -632,11 +754,16 @@ router.get('/members/export', requirePermission('membership.members.view'), asyn
       where.endDate = { gte: now, lte: future };
     }
     if (search) {
+      const q = search as string;
+      const seqGuess = /^\d+$/.test(q.trim()) ? parseInt(q.trim(), 10) : NaN;
       where.OR = [
-        { memberName: { contains: search as string, mode: 'insensitive' } },
-        { memberEmail: { contains: search as string, mode: 'insensitive' } },
-        { memberPhone: { contains: search as string, mode: 'insensitive' } },
+        { memberName: { contains: q, mode: 'insensitive' } },
+        { memberEmail: { contains: q, mode: 'insensitive' } },
+        { memberPhone: { contains: q, mode: 'insensitive' } },
       ];
+      if (!Number.isNaN(seqGuess)) {
+        where.OR.push({ membershipSeq: seqGuess });
+      }
     }
 
     const memberships = await prisma.memberMembership.findMany({
@@ -646,6 +773,11 @@ router.get('/members/export', requirePermission('membership.members.view'), asyn
       },
       orderBy: { createdAt: 'desc' },
       take: 10000,
+    });
+
+    const exportOrgFmt = await prisma.organization.findUnique({
+      where: { id: req.org.id },
+      select: { membershipNumberPrefix: true, membershipNumberPadLength: true },
     });
 
     const delimParam = String(req.query.delimiter ?? '').toLowerCase();
@@ -670,6 +802,7 @@ router.get('/members/export', requirePermission('membership.members.view'), asyn
       'membershipTypeId',
       'memberName',
       'memberEmail',
+      'membershipNumber',
       'memberPhone',
       'memberAddress',
       'memberCity',
@@ -685,6 +818,11 @@ router.get('/members/export', requirePermission('membership.members.view'), asyn
       m.membershipType.id,
       m.memberName,
       m.memberEmail,
+      formatMembershipNumber(
+        exportOrgFmt?.membershipNumberPrefix,
+        exportOrgFmt?.membershipNumberPadLength,
+        m.membershipSeq
+      ) ?? '',
       m.memberPhone ?? '',
       m.memberAddress ?? '',
       m.memberCity ?? '',
@@ -744,7 +882,19 @@ router.get('/members/:id', requirePermission('membership.members.view'), async (
       return;
     }
 
-    res.json(membership);
+    const orgFmtOne = await prisma.organization.findUnique({
+      where: { id: req.org.id },
+      select: { membershipNumberPrefix: true, membershipNumberPadLength: true },
+    });
+
+    res.json({
+      ...membership,
+      membershipNumber: formatMembershipNumber(
+        orgFmtOne?.membershipNumberPrefix,
+        orgFmtOne?.membershipNumberPadLength,
+        membership.membershipSeq
+      ),
+    });
   } catch (error: any) {
     console.error('Error fetching membership:', error);
     res.status(500).json({ error: error.message || 'Internal server error' });
@@ -808,33 +958,52 @@ router.post('/members', requirePermission('membership.members.create'), async (r
       ? new Date(endDate)
       : new Date(start.getTime() + membershipType.durationMonths * 30 * 24 * 60 * 60 * 1000);
 
-    const membership = await prisma.memberMembership.create({
-      data: {
-        orgId: req.org.id,
-        membershipTypeId,
-        memberName,
-        memberEmail,
-        memberPhone: phoneNorm.e164,
-        memberAddress: memberAddress || null,
-        memberCity: memberCity || null,
-        memberCountry: memberCountry || null,
-        startDate: start,
-        endDate: end,
-        paymentStatus: paymentStatus || 'paid',
-        paymentAmount: paymentAmount ? Math.round(paymentAmount * 100) : null,
-        paymentMethod: paymentMethod || null,
-        notes: notes || null,
-        createdById: req.user.id,
-        qrToken: generateQrToken(),
-        cardDesignId: resolvedMemberCard,
+    const membership = await prisma.$transaction(
+      async (tx) => {
+        const seq = await allocateMembershipSeq(tx, req.org!.id);
+        return tx.memberMembership.create({
+          data: {
+            orgId: req.org!.id,
+            membershipTypeId,
+            memberName,
+            memberEmail,
+            memberPhone: phoneNorm.e164,
+            memberAddress: memberAddress || null,
+            memberCity: memberCity || null,
+            memberCountry: memberCountry || null,
+            startDate: start,
+            endDate: end,
+            paymentStatus: paymentStatus || 'paid',
+            paymentAmount: paymentAmount ? Math.round(paymentAmount * 100) : null,
+            paymentMethod: paymentMethod || null,
+            notes: notes || null,
+            createdById: req.user!.id,
+            qrToken: generateQrToken(),
+            cardDesignId: resolvedMemberCard,
+            membershipSeq: seq,
+          },
+          include: {
+            membershipType: true,
+            cardDesign: true,
+          },
+        });
       },
-      include: {
-        membershipType: true,
-        cardDesign: true,
-      },
+      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable }
+    );
+
+    const orgFmtCreate = await prisma.organization.findUnique({
+      where: { id: req.org.id },
+      select: { membershipNumberPrefix: true, membershipNumberPadLength: true },
     });
 
-    res.status(201).json(membership);
+    res.status(201).json({
+      ...membership,
+      membershipNumber: formatMembershipNumber(
+        orgFmtCreate?.membershipNumberPrefix,
+        orgFmtCreate?.membershipNumberPadLength,
+        membership.membershipSeq
+      ),
+    });
   } catch (error: any) {
     console.error('Error creating membership:', error);
     res.status(500).json({ error: error.message || 'Internal server error' });
@@ -854,7 +1023,7 @@ router.put('/members/:id', requirePermission('membership.members.edit'), async (
 
     Object.keys(req.body).forEach((key) => {
       if (req.body[key] !== undefined) {
-        if (key === 'cardDesignId') {
+        if (key === 'cardDesignId' || key === 'membershipSeq' || key === 'membershipNumber') {
           return;
         }
         if (key === 'paymentAmount') {
@@ -910,7 +1079,19 @@ router.put('/members/:id', requirePermission('membership.members.edit'), async (
       },
     });
 
-    res.json(updated);
+    const orgFmtUp = await prisma.organization.findUnique({
+      where: { id: req.org.id },
+      select: { membershipNumberPrefix: true, membershipNumberPadLength: true },
+    });
+
+    res.json({
+      ...updated,
+      membershipNumber: formatMembershipNumber(
+        orgFmtUp?.membershipNumberPrefix,
+        orgFmtUp?.membershipNumberPadLength,
+        updated.membershipSeq
+      ),
+    });
   } catch (error: any) {
     console.error('Error updating membership:', error);
     res.status(500).json({ error: error.message || 'Internal server error' });
@@ -933,7 +1114,14 @@ router.get('/members/:id/card', requirePermission('membership.members.view'), as
           include: { cardDesign: true },
         },
         cardDesign: true,
-        organization: { select: { name: true, slug: true } },
+        organization: {
+          select: {
+            name: true,
+            slug: true,
+            membershipNumberPrefix: true,
+            membershipNumberPadLength: true,
+          },
+        },
       },
     });
 
@@ -941,6 +1129,12 @@ router.get('/members/:id/card', requirePermission('membership.members.view'), as
       res.status(404).json({ error: 'Membership not found' });
       return;
     }
+
+    const membershipNumberDisplay = formatMembershipNumber(
+      membership.organization.membershipNumberPrefix,
+      membership.organization.membershipNumberPadLength,
+      membership.membershipSeq
+    );
 
     // Ensure QR token exists (for members created before this feature)
     let qrToken = membership.qrToken;
@@ -970,7 +1164,9 @@ router.get('/members/:id/card', requirePermission('membership.members.view'), as
         id: membership.id,
         memberName: membership.memberName,
         memberEmail: membership.memberEmail,
-        memberPhone: membership.memberPhone,
+        memberPhone: membershipNumberDisplay ? null : membership.memberPhone,
+        membershipSeq: membership.membershipSeq,
+        membershipNumberDisplay,
         status: membership.status,
         startDate: membership.startDate,
         endDate: membership.endDate,
@@ -989,6 +1185,8 @@ router.get('/members/:id/card', requirePermission('membership.members.view'), as
             logoUrl: design.logoUrl,
             showQR: design.showQR,
             qrPosition: design.qrPosition,
+            showMemberId: design.showMemberId,
+            memberIdPrefix: design.memberIdPrefix,
             customCss: design.customCss,
             fontFamily: design.fontFamily,
           }
@@ -1001,6 +1199,8 @@ router.get('/members/:id/card', requirePermission('membership.members.view'), as
             logoUrl: null,
             showQR: true,
             qrPosition: 'right',
+            showMemberId: true,
+            memberIdPrefix: null,
             customCss: null,
             fontFamily: 'sans-serif',
           },
@@ -1205,27 +1405,34 @@ router.post('/members/bulk', requirePermission('membership.members.create'), asy
         }
         if (!end) end = new Date(start.getTime() + membershipType.durationMonths * 30 * 24 * 60 * 60 * 1000);
 
-        await prisma.memberMembership.create({
-          data: {
-            orgId: req.org.id,
-            membershipTypeId: membershipType.id,
-            memberName: m.memberName,
-            memberEmail: m.memberEmail,
-            memberPhone: bulkPhone.e164,
-            memberAddress: m.memberAddress || null,
-            memberCity: m.memberCity || null,
-            memberCountry: m.memberCountry || null,
-            startDate: start,
-            endDate: end,
-            paymentStatus: m.paymentStatus || 'paid',
-            paymentAmount: m.paymentAmount != null ? Math.round(Number(m.paymentAmount) * 100) : null,
-            paymentMethod: m.paymentMethod || null,
-            notes: m.notes || null,
-            createdById: req.user.id,
-            qrToken: generateQrToken(),
-            cardDesignId: null,
+        await prisma.$transaction(
+          async (tx) => {
+            const seq = await allocateMembershipSeq(tx, req.org!.id);
+            await tx.memberMembership.create({
+              data: {
+                orgId: req.org!.id,
+                membershipTypeId: membershipType.id,
+                memberName: m.memberName,
+                memberEmail: m.memberEmail,
+                memberPhone: bulkPhone.e164,
+                memberAddress: m.memberAddress || null,
+                memberCity: m.memberCity || null,
+                memberCountry: m.memberCountry || null,
+                startDate: start,
+                endDate: end,
+                paymentStatus: m.paymentStatus || 'paid',
+                paymentAmount: m.paymentAmount != null ? Math.round(Number(m.paymentAmount) * 100) : null,
+                paymentMethod: m.paymentMethod || null,
+                notes: m.notes || null,
+                createdById: req.user!.id,
+                qrToken: generateQrToken(),
+                cardDesignId: null,
+                membershipSeq: seq,
+              },
+            });
           },
-        });
+          { isolationLevel: Prisma.TransactionIsolationLevel.Serializable }
+        );
         results.created++;
       } catch (err: any) {
         results.failed++;

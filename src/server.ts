@@ -17,6 +17,8 @@ import onboardingRoutes from './routes/onboarding';
 import { registerHrModule } from './modules/hr';
 import { registerTicketingModule } from './modules/ticketing';
 import { registerBillingModule } from './modules/billing';
+import { registerSubscriptionsModule } from './modules/subscriptions';
+import { handleSubscriptionPaymentCallback } from './core/payments/subscription-payment-callback';
 import { registerMarketplaceModule } from './modules/marketplace';
 import { registerPmoModule } from './modules/pmo';
 import { registerDocumentsModule } from './modules/documents';
@@ -112,6 +114,7 @@ app.use('/api/analytics', analyticsRoutes);
 const mainRouter = express.Router();
 registerHrModule(mainRouter);
 registerTicketingModule(mainRouter);
+registerSubscriptionsModule(mainRouter);
 registerBillingModule(mainRouter);
 registerMarketplaceModule(mainRouter);
 registerPmoModule(mainRouter);
@@ -120,174 +123,16 @@ registerSalesModule(mainRouter);
 registerMembershipModule(mainRouter);
 app.use(mainRouter);
 
-// Payment callback webhook (no auth required - Moyasar calls this)
-app.post('/api/billing/payment-callback', 
+const subscriptionPaymentCallbackMiddleware = [
   logWebhookEvent,
   webhookIdempotency,
   verifyMoyasarWebhook,
-  async (req, res) => {
-  try {
-    const { id: invoiceId, status, amount, metadata } = req.body;
+  handleSubscriptionPaymentCallback,
+] as const;
 
-    if (!invoiceId || !status) {
-      res.status(400).json({ error: 'Missing required fields' });
-      return;
-    }
-
-    const { moyasarService } = await import('./core/payments/moyasar');
-    const invoice = await moyasarService.getInvoiceById(invoiceId);
-
-    if (invoice.status !== 'paid') {
-      res.json({ received: true, message: 'Payment not completed yet' });
-      return;
-    }
-
-    // Extract metadata
-    const orgId = metadata?.organizationId || invoice.metadata?.organizationId;
-    const moduleId = metadata?.moduleId || invoice.metadata?.moduleId;
-    const plan = metadata?.plan || invoice.metadata?.plan;
-    const billingPeriod = metadata?.billingPeriod || invoice.metadata?.billingPeriod || 'monthly';
-
-    if (!orgId || !moduleId) {
-      console.error('Missing organizationId or moduleId in payment callback');
-      res.status(400).json({ error: 'Missing organization or module information' });
-      return;
-    }
-
-    // Find the payment record
-    const payment = await prisma.payment.findFirst({
-      where: {
-        providerRef: invoiceId,
-        provider: 'moyasar',
-      },
-    });
-
-    if (payment) {
-      await prisma.payment.update({
-        where: { id: payment.id },
-        data: { status: 'succeeded' },
-      });
-    }
-
-    // Calculate billing period end date
-    const now = new Date();
-    const currentPeriodEnd = new Date(now);
-    if (billingPeriod === 'monthly') {
-      currentPeriodEnd.setMonth(currentPeriodEnd.getMonth() + 1);
-    } else {
-      currentPeriodEnd.setFullYear(currentPeriodEnd.getFullYear() + 1);
-    }
-
-    // Find existing subscription
-    const existingSubscription = await prisma.subscription.findFirst({
-      where: {
-        organizationId: orgId,
-        moduleId: moduleId,
-      },
-    });
-
-    // Create or update subscription
-    const subscription = existingSubscription
-      ? await prisma.subscription.update({
-          where: { id: existingSubscription.id },
-          data: {
-            plan,
-            status: 'active',
-            currentPeriodStart: now,
-            currentPeriodEnd,
-            cancelAtPeriodEnd: false,
-            canceledAt: null,
-          },
-        })
-      : await prisma.subscription.create({
-          data: {
-            organizationId: orgId,
-            moduleId: moduleId,
-            plan,
-            status: 'active',
-            currentPeriodStart: now,
-            currentPeriodEnd,
-          },
-        });
-
-    // Update OrgModule
-    // For active subscriptions, expiresAt should be null (no expiration)
-    // The subscription tracks the billing period, module stays active until canceled
-    await prisma.orgModule.upsert({
-      where: {
-        organizationId_moduleId: {
-          organizationId: orgId,
-          moduleId: moduleId,
-        },
-      },
-      update: {
-        isEnabled: true,
-        plan,
-        expiresAt: null, // No expiration for active subscriptions
-        trialEndsAt: null,
-      },
-      create: {
-        organizationId: orgId,
-        moduleId: moduleId,
-        isEnabled: true,
-        plan,
-        expiresAt: null, // No expiration for active subscriptions
-        trialEndsAt: null,
-      },
-    });
-
-    // If this is a renewal payment, process it
-    if (metadata?.isRenewal === true || invoice.metadata?.isRenewal === true) {
-      const { processRenewalPayment } = await import('./core/jobs/subscription-renewal');
-      if (payment) {
-        await processRenewalPayment(subscription.id, payment.id);
-      }
-    }
-
-    try {
-      const [orgRec, moduleRec] = await Promise.all([
-        prisma.organization.findUnique({
-          where: { id: orgId },
-          include: {
-            memberships: {
-              where: { isActive: true },
-              include: { user: true },
-              take: 1,
-            },
-          },
-        }),
-        prisma.module.findUnique({ where: { id: moduleId } }),
-      ]);
-      const owner = orgRec?.memberships?.[0]?.user;
-      if (owner?.email && moduleRec && orgRec) {
-        const halalas = typeof invoice.amount === 'number' ? invoice.amount : 0;
-        const amountLabel = `${(halalas / 100).toFixed(2)} SAR`;
-        const billingUrl = `${process.env.FRONTEND_URL || 'http://localhost:3000'}/dashboard/billing/subscriptions`;
-        const { sendEmailQueued, emailTemplates } = await import('./core/email');
-        const tpl = emailTemplates.purchaseConfirmation({
-          userName: owner.name || owner.email.split('@')[0] || 'User',
-          orgName: orgRec.name,
-          moduleName: moduleRec.name,
-          amountLabel,
-          billingUrl,
-        });
-        sendEmailQueued({
-          to: owner.email,
-          subject: tpl.subject,
-          html: tpl.html,
-          priority: 'high',
-        }).catch((err) => console.error('Purchase confirmation email failed:', err));
-      }
-    } catch (emailErr) {
-      console.error('Purchase confirmation email:', emailErr);
-    }
-
-    res.json({ success: true, subscription });
-  } catch (error) {
-    console.error('Payment callback error:', error);
-    res.status(500).json({ error: 'Internal server error' });
-  }
-});
+// Payment callback webhook (no auth — Moyasar calls this). Legacy path kept for existing integrations.
+app.post('/api/billing/payment-callback', ...subscriptionPaymentCallbackMiddleware);
+app.post('/api/subscriptions/payment-callback', ...subscriptionPaymentCallbackMiddleware);
 
 // Error handler with tracking and user-friendly messages (no raw DB/stack in response)
 app.use((err: Error, req: express.Request, res: express.Response, next: express.NextFunction) => {
