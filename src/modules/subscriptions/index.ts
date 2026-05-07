@@ -382,6 +382,55 @@ router.put('/:id/plan', requirePermission('subscriptions.manage'), async (req, r
       return;
     }
 
+    const moyasarConfigured = !!process.env.MOYASAR_SECRET_KEY;
+
+    if (moyasarConfigured && modulePrice.priceCents > 0) {
+      try {
+        const frontendUrl = process.env.FRONTEND_URL || process.env.CLIENT_URL || 'http://localhost:3000';
+        const apiBase = process.env.API_URL || 'http://localhost:3001';
+        const invoice = await moyasarService.createInvoice({
+          amount: modulePrice.priceCents,
+          description: `Plan change: ${subscription.module.name} — ${plan} (${period})`,
+          metadata: {
+            organizationId: req.org.id,
+            organizationName: req.org.name,
+            moduleId: subscription.moduleId,
+            moduleKey: subscription.module.key,
+            plan,
+            billingPeriod: period,
+            userId: req.user.id,
+          },
+          success_url: `${frontendUrl}/dashboard/subscription?payment=success`,
+          back_url: `${frontendUrl}/dashboard/subscription/modules`,
+          callback_url: `${apiBase}/api/subscriptions/payment-callback`,
+          expired_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+        });
+
+        const payment = await prisma.payment.create({
+          data: {
+            organizationId: req.org.id,
+            moduleId: subscription.moduleId,
+            subscriptionId: subscription.id,
+            amountCents: modulePrice.priceCents,
+            currency: modulePrice.currency,
+            status: 'pending',
+            provider: 'moyasar',
+            providerRef: invoice.id,
+          },
+        });
+
+        res.json({
+          invoiceUrl: invoice.invoice_url,
+          invoiceId: invoice.id,
+          paymentId: payment.id,
+          message: 'Complete payment to apply the new plan',
+        });
+        return;
+      } catch (error: any) {
+        console.error('Error creating Moyasar invoice for plan change:', error);
+      }
+    }
+
     const updated = await prisma.subscription.update({
       where: { id },
       data: {
