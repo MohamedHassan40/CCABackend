@@ -267,26 +267,60 @@ router.post('/types', requirePermission('membership.types.create'), async (req: 
 
     const { name, description, priceCents, currency, durationMonths, benefits, features, isActive, maxMemberships, cardDesignId } = req.body;
 
-    if (!name) {
+    if (!name || !String(name).trim()) {
       res.status(400).json({ error: 'Name is required' });
       return;
     }
+
+    const descTrim = description != null ? String(description).trim() : '';
+    if (!descTrim) {
+      res.status(400).json({ error: 'Description is required' });
+      return;
+    }
+
+    let benefitArr: string[] = [];
+    if (Array.isArray(benefits)) {
+      benefitArr = benefits.map((b: unknown) => String(b).trim()).filter(Boolean);
+    } else if (typeof benefits === 'string') {
+      benefitArr = benefits
+        .split('\n')
+        .map((s: string) => s.trim())
+        .filter(Boolean);
+    }
+    if (benefitArr.length === 0) {
+      res.status(400).json({ error: 'At least one benefit is required' });
+      return;
+    }
+
+    const dm = Number(durationMonths);
+    if (!Number.isFinite(dm) || dm < 1) {
+      res.status(400).json({ error: 'Duration must be at least 1 month' });
+      return;
+    }
+
+    const designCount = await prisma.membershipCardDesign.count({
+      where: { orgId: req.org.id },
+    });
 
     const resolvedCardDesignId = await resolveOrgCardDesignId(req.org.id, cardDesignId);
     if (cardDesignId != null && cardDesignId !== '' && !resolvedCardDesignId) {
       res.status(400).json({ error: 'Card design not found' });
       return;
     }
+    if (designCount > 0 && !resolvedCardDesignId) {
+      res.status(400).json({ error: 'Card template is required' });
+      return;
+    }
 
     const type = await prisma.membershipType.create({
       data: {
         orgId: req.org.id,
-        name,
-        description: description || null,
-        priceCents: priceCents ? Math.round(priceCents * 100) : 0,
-        currency: currency || 'SAR',
-        durationMonths: durationMonths || 12,
-        benefits: benefits || [],
+        name: String(name).trim(),
+        description: descTrim,
+        priceCents: priceCents != null && priceCents !== '' ? Math.round(Number(priceCents) * 100) : 0,
+        currency: currency != null && String(currency).trim() ? String(currency).trim() : 'SAR',
+        durationMonths: dm,
+        benefits: benefitArr,
         features: features || null,
         isActive: isActive !== undefined ? isActive : true,
         maxMemberships: maxMemberships || null,
@@ -926,8 +960,24 @@ router.post('/members', requirePermission('membership.members.create'), async (r
       cardDesignId,
     } = req.body;
 
-    if (!membershipTypeId || !memberName || !memberEmail) {
+    if (!membershipTypeId || !String(memberName || '').trim() || !String(memberEmail || '').trim()) {
       res.status(400).json({ error: 'Membership type, member name, and email are required' });
+      return;
+    }
+
+    const addrTrim = memberAddress != null ? String(memberAddress).trim() : '';
+    const cityTrim = memberCity != null ? String(memberCity).trim() : '';
+    if (!addrTrim) {
+      res.status(400).json({ error: 'Address is required' });
+      return;
+    }
+    if (!cityTrim) {
+      res.status(400).json({ error: 'City is required' });
+      return;
+    }
+
+    if (!startDate || String(startDate).trim() === '') {
+      res.status(400).json({ error: 'Start date is required' });
       return;
     }
 
@@ -942,6 +992,10 @@ router.post('/members', requirePermission('membership.members.create'), async (r
       res.status(400).json({ error: phoneNorm.error });
       return;
     }
+    if (!phoneNorm.e164) {
+      res.status(400).json({ error: 'Phone number is required' });
+      return;
+    }
 
     // Get membership type to calculate end date if not provided
     const membershipType = await prisma.membershipType.findFirst({
@@ -953,7 +1007,11 @@ router.post('/members', requirePermission('membership.members.create'), async (r
       return;
     }
 
-    const start = startDate ? new Date(startDate) : new Date();
+    const start = new Date(startDate);
+    if (Number.isNaN(start.getTime())) {
+      res.status(400).json({ error: 'Invalid start date' });
+      return;
+    }
     const end = endDate
       ? new Date(endDate)
       : new Date(start.getTime() + membershipType.durationMonths * 30 * 24 * 60 * 60 * 1000);
@@ -965,11 +1023,11 @@ router.post('/members', requirePermission('membership.members.create'), async (r
           data: {
             orgId: req.org!.id,
             membershipTypeId,
-            memberName,
-            memberEmail,
+            memberName: String(memberName).trim(),
+            memberEmail: String(memberEmail).trim(),
             memberPhone: phoneNorm.e164,
-            memberAddress: memberAddress || null,
-            memberCity: memberCity || null,
+            memberAddress: addrTrim,
+            memberCity: cityTrim,
             memberCountry: memberCountry || null,
             startDate: start,
             endDate: end,
