@@ -2,7 +2,7 @@ import { Router } from 'express';
 import prisma from '../../core/db';
 import { authMiddleware } from '../../middleware/auth';
 import { requirePermission } from '../../middleware/permissions';
-import { moyasarService } from '../../core/payments/moyasar';
+import { getInvoiceCheckoutUrl, moyasarService } from '../../core/payments/moyasar';
 
 const router = Router();
 
@@ -93,6 +93,7 @@ router.post('/subscribe', requirePermission('subscriptions.manage'), async (req,
         const apiBase = process.env.API_URL || 'http://localhost:3001';
         const invoice = await moyasarService.createInvoice({
           amount: modulePrice.priceCents,
+          currency: modulePrice.currency,
           description: `Subscription: ${module.name} - ${plan} plan (${period})`,
           metadata: {
             organizationId: req.org.id,
@@ -109,6 +110,8 @@ router.post('/subscribe', requirePermission('subscriptions.manage'), async (req,
           expired_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
         });
 
+        const checkoutUrl = getInvoiceCheckoutUrl(invoice);
+
         const payment = await prisma.payment.create({
           data: {
             organizationId: req.org.id,
@@ -118,11 +121,12 @@ router.post('/subscribe', requirePermission('subscriptions.manage'), async (req,
             status: 'pending',
             provider: 'moyasar',
             providerRef: invoice.id,
+            invoiceUrl: checkoutUrl ?? undefined,
           },
         });
 
         return res.json({
-          invoiceUrl: invoice.invoice_url,
+          invoiceUrl: checkoutUrl,
           invoiceId: invoice.id,
           paymentId: payment.id,
           message: 'Please complete payment to activate subscription',
@@ -390,6 +394,7 @@ router.put('/:id/plan', requirePermission('subscriptions.manage'), async (req, r
         const apiBase = process.env.API_URL || 'http://localhost:3001';
         const invoice = await moyasarService.createInvoice({
           amount: modulePrice.priceCents,
+          currency: modulePrice.currency,
           description: `Plan change: ${subscription.module.name} — ${plan} (${period})`,
           metadata: {
             organizationId: req.org.id,
@@ -406,6 +411,8 @@ router.put('/:id/plan', requirePermission('subscriptions.manage'), async (req, r
           expired_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
         });
 
+        const checkoutUrl = getInvoiceCheckoutUrl(invoice);
+
         const payment = await prisma.payment.create({
           data: {
             organizationId: req.org.id,
@@ -416,11 +423,12 @@ router.put('/:id/plan', requirePermission('subscriptions.manage'), async (req, r
             status: 'pending',
             provider: 'moyasar',
             providerRef: invoice.id,
+            invoiceUrl: checkoutUrl ?? undefined,
           },
         });
 
         res.json({
-          invoiceUrl: invoice.invoice_url,
+          invoiceUrl: checkoutUrl,
           invoiceId: invoice.id,
           paymentId: payment.id,
           message: 'Complete payment to apply the new plan',

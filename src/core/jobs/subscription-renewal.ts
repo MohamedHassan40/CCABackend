@@ -2,7 +2,7 @@
 // Runs daily to check for expiring subscriptions and renew them
 
 import prisma from '../db';
-import { moyasarService } from '../payments/moyasar';
+import { getInvoiceCheckoutUrl, moyasarService } from '../payments/moyasar';
 import { sendEmail, emailTemplates } from '../email';
 import { captureException } from '../errorTracking';
 
@@ -194,6 +194,7 @@ async function attemptRenewal(subscription: any): Promise<RenewalResult> {
       try {
         const invoice = await moyasarService.createInvoice({
           amount: modulePrice.priceCents,
+          currency: modulePrice.currency,
           description: `Renewal: ${subscription.module.name} - ${subscription.plan} plan`,
           metadata: {
             organizationId: subscription.organizationId,
@@ -211,6 +212,8 @@ async function attemptRenewal(subscription: any): Promise<RenewalResult> {
           expired_at: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(), // 7 days
         });
 
+        const checkoutUrl = getInvoiceCheckoutUrl(invoice);
+
         // Create pending payment
         await prisma.payment.create({
           data: {
@@ -222,6 +225,7 @@ async function attemptRenewal(subscription: any): Promise<RenewalResult> {
             status: 'pending',
             provider: 'moyasar',
             providerRef: invoice.id,
+            invoiceUrl: checkoutUrl ?? undefined,
           },
         });
 

@@ -1,37 +1,83 @@
 import type { Request, Response } from 'express';
 import prisma from '../db';
+import type { MoyasarInvoice } from './moyasar';
+
+function mergeMetadata(body: Record<string, unknown>, invoice: MoyasarInvoice): Record<string, unknown> {
+  const fromInvoice =
+    invoice.metadata && typeof invoice.metadata === 'object' && !Array.isArray(invoice.metadata)
+      ? invoice.metadata
+      : {};
+  const fromBody =
+    body.metadata && typeof body.metadata === 'object' && !Array.isArray(body.metadata)
+      ? (body.metadata as Record<string, unknown>)
+      : {};
+  return { ...fromInvoice, ...fromBody };
+}
 
 /**
  * Moyasar webhook handler for platform module subscriptions (activated via /api/subscriptions).
  * Mounted at both `/api/subscriptions/payment-callback` and legacy `/api/billing/payment-callback`.
+ *
+ * Accepts either an **invoice** payload (`id` = invoice id) or a **payment** payload (`invoice_id` set, or `id` = payment id).
  */
 export async function handleSubscriptionPaymentCallback(req: Request, res: Response): Promise<void> {
   try {
-    const { id: invoiceId, status, metadata } = req.body;
+    const body = req.body as Record<string, unknown>;
+    const status = body.status;
+    if (status === undefined || status === null || status === '') {
+      res.status(400).json({ error: 'Missing required fields' });
+      return;
+    }
 
-    if (!invoiceId || !status) {
+    const candidateId =
+      typeof body.invoice_id === 'string'
+        ? body.invoice_id
+        : typeof body.id === 'string'
+          ? body.id
+          : undefined;
+
+    if (!candidateId) {
       res.status(400).json({ error: 'Missing required fields' });
       return;
     }
 
     const { moyasarService } = await import('./moyasar');
-    const invoice = await moyasarService.getInvoiceById(invoiceId);
+
+    let invoice: MoyasarInvoice;
+    try {
+      invoice = await moyasarService.getInvoiceById(candidateId);
+    } catch {
+      try {
+        const pay = await moyasarService.getPaymentById(candidateId);
+        if (!pay.invoice_id) {
+          res.status(400).json({ error: 'Could not resolve invoice for callback' });
+          return;
+        }
+        invoice = await moyasarService.getInvoiceById(pay.invoice_id);
+      } catch {
+        res.status(400).json({ error: 'Invalid invoice or payment reference' });
+        return;
+      }
+    }
 
     if (invoice.status !== 'paid') {
       res.json({ received: true, message: 'Payment not completed yet' });
       return;
     }
 
-    const orgId = metadata?.organizationId || invoice.metadata?.organizationId;
-    const moduleId = metadata?.moduleId || invoice.metadata?.moduleId;
-    const plan = metadata?.plan || invoice.metadata?.plan;
-    const billingPeriod = metadata?.billingPeriod || invoice.metadata?.billingPeriod || 'monthly';
+    const metadata = mergeMetadata(body, invoice);
+    const orgId = metadata.organizationId as string | undefined;
+    const moduleId = metadata.moduleId as string | undefined;
+    const plan = metadata.plan as string | undefined;
+    const billingPeriod = (metadata.billingPeriod as string | undefined) || 'monthly';
 
-    if (!orgId || !moduleId) {
-      console.error('Missing organizationId or moduleId in payment callback');
-      res.status(400).json({ error: 'Missing organization or module information' });
+    if (!orgId || !moduleId || !plan) {
+      console.error('Missing organizationId, moduleId, or plan in payment callback');
+      res.status(400).json({ error: 'Missing organization, module, or plan information' });
       return;
     }
+
+    const invoiceId = invoice.id;
 
     const payment = await prisma.payment.findFirst({
       where: {
@@ -40,14 +86,15 @@ export async function handleSubscriptionPaymentCallback(req: Request, res: Respo
       },
     });
 
+    const now = new Date();
+
     if (payment) {
       await prisma.payment.update({
         where: { id: payment.id },
-        data: { status: 'succeeded' },
+        data: { status: 'succeeded', paidAt: now },
       });
     }
 
-    const now = new Date();
     const currentPeriodEnd = new Date(now);
     if (billingPeriod === 'monthly') {
       currentPeriodEnd.setMonth(currentPeriodEnd.getMonth() + 1);
@@ -108,7 +155,7 @@ export async function handleSubscriptionPaymentCallback(req: Request, res: Respo
       },
     });
 
-    if (metadata?.isRenewal === true || invoice.metadata?.isRenewal === true) {
+    if (metadata.isRenewal === true || metadata.isRenewal === 'true') {
       const { processRenewalPayment } = await import('../jobs/subscription-renewal');
       if (payment) {
         await processRenewalPayment(subscription.id, payment.id);
@@ -131,8 +178,9 @@ export async function handleSubscriptionPaymentCallback(req: Request, res: Respo
       ]);
       const owner = orgRec?.memberships?.[0]?.user;
       if (owner?.email && moduleRec && orgRec) {
-        const halalas = typeof invoice.amount === 'number' ? invoice.amount : 0;
-        const amountLabel = `${(halalas / 100).toFixed(2)} SAR`;
+        const minorUnits = typeof invoice.amount === 'number' ? invoice.amount : 0;
+        const cur = invoice.currency || 'SAR';
+        const amountLabel = `${(minorUnits / 100).toFixed(2)} ${cur}`;
         const billingUrl = `${process.env.FRONTEND_URL || 'http://localhost:3000'}/dashboard/subscription`;
         const { sendEmailQueued, emailTemplates } = await import('../email');
         const tpl = emailTemplates.purchaseConfirmation({
