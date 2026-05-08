@@ -86,8 +86,32 @@ router.post('/subscribe', requirePermission('subscriptions.manage'), async (req,
     }
 
     const moyasarConfigured = !!process.env.MOYASAR_SECRET_KEY;
+    const paidPlan = modulePrice.priceCents > 0;
 
-    if (moyasarConfigured) {
+    /** Paid plans require Moyasar checkout — never activate the module until the webhook confirms payment. */
+    if (moyasarConfigured && paidPlan) {
+      const existingPending = await prisma.payment.findFirst({
+        where: {
+          organizationId: req.org.id,
+          moduleId: module.id,
+          status: 'pending',
+          provider: 'moyasar',
+          invoiceUrl: { not: null },
+        },
+        orderBy: { createdAt: 'desc' },
+      });
+
+      if (existingPending?.invoiceUrl && existingPending.providerRef) {
+        res.json({
+          invoiceUrl: existingPending.invoiceUrl,
+          invoiceId: existingPending.providerRef,
+          paymentId: existingPending.id,
+          message: 'Complete payment to activate subscription',
+          resumed: true,
+        });
+        return;
+      }
+
       try {
         const frontendUrl = process.env.FRONTEND_URL || process.env.CLIENT_URL || 'http://localhost:3000';
         const apiBase = process.env.API_URL || 'http://localhost:3001';
@@ -111,6 +135,13 @@ router.post('/subscribe', requirePermission('subscriptions.manage'), async (req,
         });
 
         const checkoutUrl = getInvoiceCheckoutUrl(invoice);
+        if (!checkoutUrl) {
+          res.status(502).json({
+            error:
+              'Payment provider did not return a checkout URL. Check Moyasar credentials and API response, then try again.',
+          });
+          return;
+        }
 
         const payment = await prisma.payment.create({
           data: {
@@ -121,19 +152,33 @@ router.post('/subscribe', requirePermission('subscriptions.manage'), async (req,
             status: 'pending',
             provider: 'moyasar',
             providerRef: invoice.id,
-            invoiceUrl: checkoutUrl ?? undefined,
+            invoiceUrl: checkoutUrl,
           },
         });
 
-        return res.json({
+        res.json({
           invoiceUrl: checkoutUrl,
           invoiceId: invoice.id,
           paymentId: payment.id,
           message: 'Please complete payment to activate subscription',
         });
-      } catch (error: any) {
+        return;
+      } catch (error: unknown) {
         console.error('Error creating Moyasar invoice:', error);
+        const msg = error instanceof Error ? error.message : 'Could not start payment with Moyasar.';
+        res.status(502).json({
+          error: `${msg} Subscription was not activated.`,
+        });
+        return;
       }
+    }
+
+    if (paidPlan && !moyasarConfigured) {
+      res.status(503).json({
+        error:
+          'Online payment is not configured (Moyasar). Add MOYASAR_SECRET_KEY to enable paid module subscriptions.',
+      });
+      return;
     }
 
     const now = new Date();
@@ -204,14 +249,14 @@ router.post('/subscribe', requirePermission('subscriptions.manage'), async (req,
         subscriptionId: subscription.id,
         amountCents: modulePrice.priceCents,
         currency: modulePrice.currency,
-        status: moyasarConfigured ? 'pending' : 'succeeded',
-        provider: moyasarConfigured ? 'moyasar' : 'manual',
-        paidAt: moyasarConfigured ? null : now,
+        status: 'succeeded',
+        provider: 'manual',
+        paidAt: now,
       },
     });
 
     res.json({
-      message: moyasarConfigured ? 'Subscription activated (payment pending)' : 'Subscription activated successfully',
+      message: 'Subscription activated successfully',
       subscription,
       paymentId: payment.id,
     });
@@ -250,6 +295,27 @@ router.get('/', requirePermission('subscriptions.view'), async (req, res) => {
       },
     });
 
+    const moyasarConfigured = !!process.env.MOYASAR_SECRET_KEY;
+
+    const pendingCheckoutPayments = await prisma.payment.findMany({
+      where: {
+        organizationId: req.org.id,
+        status: 'pending',
+        provider: 'moyasar',
+      },
+      select: {
+        id: true,
+        moduleId: true,
+        subscriptionId: true,
+        invoiceUrl: true,
+        amountCents: true,
+        currency: true,
+        createdAt: true,
+        providerRef: true,
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+
     res.json({
       subscriptions,
       orgModules: orgModules.map((om) => ({
@@ -262,6 +328,11 @@ router.get('/', requirePermission('subscriptions.view'), async (req, res) => {
         isExpired: om.expiresAt ? om.expiresAt < new Date() : false,
         isTrial: !!om.trialEndsAt && om.trialEndsAt >= new Date(),
       })),
+      checkout: {
+        moyasarEnabled: moyasarConfigured,
+        paidPlansRequireMoyasar: moyasarConfigured,
+      },
+      pendingCheckoutPayments,
     });
   } catch (error) {
     console.error('Error fetching subscriptions:', error);
@@ -387,8 +458,9 @@ router.put('/:id/plan', requirePermission('subscriptions.manage'), async (req, r
     }
 
     const moyasarConfigured = !!process.env.MOYASAR_SECRET_KEY;
+    const paidPlan = modulePrice.priceCents > 0;
 
-    if (moyasarConfigured && modulePrice.priceCents > 0) {
+    if (moyasarConfigured && paidPlan) {
       try {
         const frontendUrl = process.env.FRONTEND_URL || process.env.CLIENT_URL || 'http://localhost:3000';
         const apiBase = process.env.API_URL || 'http://localhost:3001';
@@ -412,6 +484,13 @@ router.put('/:id/plan', requirePermission('subscriptions.manage'), async (req, r
         });
 
         const checkoutUrl = getInvoiceCheckoutUrl(invoice);
+        if (!checkoutUrl) {
+          res.status(502).json({
+            error:
+              'Payment provider did not return a checkout URL. Plan was not changed. Try again or contact support.',
+          });
+          return;
+        }
 
         const payment = await prisma.payment.create({
           data: {
@@ -423,7 +502,7 @@ router.put('/:id/plan', requirePermission('subscriptions.manage'), async (req, r
             status: 'pending',
             provider: 'moyasar',
             providerRef: invoice.id,
-            invoiceUrl: checkoutUrl ?? undefined,
+            invoiceUrl: checkoutUrl,
           },
         });
 
@@ -434,9 +513,22 @@ router.put('/:id/plan', requirePermission('subscriptions.manage'), async (req, r
           message: 'Complete payment to apply the new plan',
         });
         return;
-      } catch (error: any) {
+      } catch (error: unknown) {
         console.error('Error creating Moyasar invoice for plan change:', error);
+        const msg = error instanceof Error ? error.message : 'Could not start payment with Moyasar.';
+        res.status(502).json({
+          error: `${msg} Your current plan was kept.`,
+        });
+        return;
       }
+    }
+
+    if (paidPlan && !moyasarConfigured) {
+      res.status(503).json({
+        error:
+          'Online payment is not configured (Moyasar). Add MOYASAR_SECRET_KEY to change to a paid plan.',
+      });
+      return;
     }
 
     const updated = await prisma.subscription.update({

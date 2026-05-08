@@ -1835,15 +1835,21 @@ router.get('/conversations', requirePermission('membership.messages.view'), asyn
       return;
     }
 
-    const { status, memberEmail, assignedToId } = req.query;
+    const { status, memberEmail, assignedToId, unassignedOnly } = req.query;
 
     const where: any = {
       orgId: req.org.id,
     };
 
     if (status) where.status = status;
-    if (memberEmail) where.memberEmail = memberEmail;
-    if (assignedToId) where.assignedToId = assignedToId;
+    if (memberEmail) {
+      where.memberEmail = { contains: memberEmail as string, mode: 'insensitive' };
+    }
+    if (unassignedOnly === 'true') {
+      where.assignedToId = null;
+    } else if (assignedToId) {
+      where.assignedToId = assignedToId as string;
+    }
 
     const conversations = await prisma.conversation.findMany({
       where,
@@ -1872,6 +1878,32 @@ router.get('/conversations', requirePermission('membership.messages.view'), asyn
     res.json(conversations);
   } catch (error: any) {
     console.error('Error fetching conversations:', error);
+    res.status(500).json({ error: error.message || 'Internal server error' });
+  }
+});
+
+// GET /api/membership/conversations/assignees — org staff for assignment (before :id route)
+router.get('/conversations/assignees', requirePermission('membership.messages.edit'), async (req: Request, res: Response) => {
+  try {
+    if (!req.org) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+
+    const rows = await prisma.membership.findMany({
+      where: { organizationId: req.org.id, isActive: true },
+      include: {
+        user: {
+          select: { id: true, name: true, email: true },
+        },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    const users = rows.map((r) => r.user).filter(Boolean);
+    res.json(users);
+  } catch (error: any) {
+    console.error('Error fetching assignees:', error);
     res.status(500).json({ error: error.message || 'Internal server error' });
   }
 });
@@ -1984,6 +2016,106 @@ router.post('/conversations', async (req: Request, res: Response) => {
   }
 });
 
+// POST /api/membership/conversations/from-admin — start or continue an open thread with a member
+router.post(
+  '/conversations/from-admin',
+  requirePermission('membership.messages.create'),
+  async (req: Request, res: Response) => {
+    try {
+      if (!req.org || !req.user) {
+        res.status(401).json({ error: 'Unauthorized' });
+        return;
+      }
+
+      const { memberMembershipId, subject, message } = req.body as {
+        memberMembershipId?: string;
+        subject?: string | null;
+        message?: string | null;
+      };
+
+      if (!memberMembershipId) {
+        res.status(400).json({ error: 'memberMembershipId is required' });
+        return;
+      }
+
+      const mm = await prisma.memberMembership.findFirst({
+        where: { id: memberMembershipId, orgId: req.org.id },
+      });
+
+      if (!mm) {
+        res.status(404).json({ error: 'Member membership not found' });
+        return;
+      }
+
+      let conversation = await prisma.conversation.findFirst({
+        where: {
+          orgId: req.org.id,
+          memberMembershipId: mm.id,
+          status: 'open',
+        },
+        orderBy: { lastMessageAt: 'desc' },
+      });
+
+      if (!conversation) {
+        conversation = await prisma.conversation.create({
+          data: {
+            orgId: req.org.id,
+            memberMembershipId: mm.id,
+            memberEmail: mm.memberEmail,
+            memberName: mm.memberName,
+            subject: subject?.trim() || null,
+            lastMessageAt: new Date(),
+          },
+        });
+      } else if (subject?.trim() && !conversation.subject) {
+        await prisma.conversation.update({
+          where: { id: conversation.id },
+          data: { subject: subject.trim() },
+        });
+      }
+
+      const adminName = (req.user as { name?: string | null }).name || req.user.email;
+
+      if (message?.trim()) {
+        await prisma.message.create({
+          data: {
+            conversationId: conversation.id,
+            senderEmail: req.user.email,
+            senderName: adminName,
+            senderType: 'admin',
+            content: message.trim(),
+          },
+        });
+        await prisma.conversation.update({
+          where: { id: conversation.id },
+          data: { lastMessageAt: new Date() },
+        });
+      }
+
+      const full = await prisma.conversation.findFirst({
+        where: { id: conversation.id, orgId: req.org.id },
+        include: {
+          memberMembership: {
+            include: { membershipType: true },
+          },
+          assignedTo: {
+            select: { id: true, name: true, email: true },
+          },
+          messages: {
+            orderBy: { createdAt: 'asc' },
+          },
+          _count: { select: { messages: true } },
+        },
+      });
+
+      res.status(201).json(full);
+    } catch (error: any) {
+      console.error('Error creating admin conversation:', error);
+      res.status(500).json({ error: error.message || 'Internal server error' });
+    }
+  }
+);
+
 // POST /api/membership/conversations/:id/messages - Send message
 router.post('/conversations/:id/messages', requirePermission('membership.messages.create'), async (req: Request, res: Response) => {
   try {
@@ -2087,6 +2219,12 @@ router.put('/conversations/:id/status', requirePermission('membership.messages.e
     const { id } = req.params;
     const { status } = req.body;
 
+    const allowed = new Set(['open', 'closed', 'archived']);
+    if (typeof status !== 'string' || !allowed.has(status)) {
+      res.status(400).json({ error: 'Invalid status' });
+      return;
+    }
+
     const conversation = await prisma.conversation.findFirst({
       where: { id, orgId: req.org.id },
     });
@@ -2108,6 +2246,44 @@ router.put('/conversations/:id/status', requirePermission('membership.messages.e
   }
 });
 
+// PUT /api/membership/conversations/:id/mark-read — mark all member messages in thread as read
+router.put('/conversations/:id/mark-read', requirePermission('membership.messages.view'), async (req: Request, res: Response) => {
+  try {
+    if (!req.org) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+
+    const { id } = req.params;
+
+    const conversation = await prisma.conversation.findFirst({
+      where: { id, orgId: req.org.id },
+    });
+
+    if (!conversation) {
+      res.status(404).json({ error: 'Conversation not found' });
+      return;
+    }
+
+    await prisma.message.updateMany({
+      where: {
+        conversationId: id,
+        senderType: 'member',
+        isRead: false,
+      },
+      data: {
+        isRead: true,
+        readAt: new Date(),
+      },
+    });
+
+    res.json({ ok: true });
+  } catch (error: any) {
+    console.error('Error marking conversation read:', error);
+    res.status(500).json({ error: error.message || 'Internal server error' });
+  }
+});
+
 // PUT /api/membership/messages/:id/read - Mark message as read
 router.put('/messages/:id/read', requirePermission('membership.messages.view'), async (req: Request, res: Response) => {
   try {
@@ -2117,6 +2293,18 @@ router.put('/messages/:id/read', requirePermission('membership.messages.view'), 
     }
 
     const { id } = req.params;
+
+    const existing = await prisma.message.findFirst({
+      where: { id },
+      include: {
+        conversation: { select: { orgId: true } },
+      },
+    });
+
+    if (!existing || existing.conversation.orgId !== req.org.id) {
+      res.status(404).json({ error: 'Message not found' });
+      return;
+    }
 
     const message = await prisma.message.update({
       where: { id },
