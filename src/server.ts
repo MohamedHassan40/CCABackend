@@ -37,6 +37,10 @@ initErrorTracking();
 
 const app = express();
 
+// Railway/Reverse-proxy deployments send X-Forwarded-* headers.
+// Trust first proxy hop so rate-limiter and req.ip work correctly.
+app.set('trust proxy', 1);
+
 // Security middleware (apply before other middleware)
 if (config.nodeEnv === 'production') {
   app.use(helmetConfig);

@@ -13,6 +13,14 @@ interface RenewalResult {
   error?: string;
 }
 
+function normalizePublicBaseUrl(value: string | undefined, fallback: string): string {
+  const raw = (value || '').trim();
+  const candidate = raw || fallback;
+  const withProtocol = /^https?:\/\//i.test(candidate) ? candidate : `https://${candidate}`;
+  const parsed = new URL(withProtocol);
+  return parsed.toString().replace(/\/$/, '');
+}
+
 /**
  * Check and renew subscriptions that are expiring soon or have expired
  */
@@ -188,8 +196,11 @@ async function attemptRenewal(subscription: any): Promise<RenewalResult> {
 
     if (moyasarConfigured) {
       // Try to create renewal invoice
-      const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
-      const apiUrl = process.env.API_URL || 'http://localhost:3001';
+      const frontendUrl = normalizePublicBaseUrl(process.env.FRONTEND_URL, 'http://localhost:3000');
+      const apiUrl = normalizePublicBaseUrl(
+        process.env.API_URL || process.env.RAILWAY_PUBLIC_DOMAIN,
+        'http://localhost:3001'
+      );
 
       try {
         const invoice = await moyasarService.createInvoice({

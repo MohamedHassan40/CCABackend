@@ -6,6 +6,14 @@ import { getInvoiceCheckoutUrl, moyasarService } from '../../core/payments/moyas
 
 const router = Router();
 
+function normalizePublicBaseUrl(value: string | undefined, fallback: string): string {
+  const raw = (value || '').trim();
+  const candidate = raw || fallback;
+  const withProtocol = /^https?:\/\//i.test(candidate) ? candidate : `https://${candidate}`;
+  const parsed = new URL(withProtocol);
+  return parsed.toString().replace(/\/$/, '');
+}
+
 /** Platform subscriptions & invoices for CCA modules — not tied to the optional org Billing module. */
 export function registerSubscriptionsModule(routerInstance: Router): void {
   routerInstance.use('/api/subscriptions', authMiddleware, router);
@@ -113,8 +121,14 @@ router.post('/subscribe', requirePermission('subscriptions.manage'), async (req,
       }
 
       try {
-        const frontendUrl = process.env.FRONTEND_URL || process.env.CLIENT_URL || 'http://localhost:3000';
-        const apiBase = process.env.API_URL || 'http://localhost:3001';
+        const frontendUrl = normalizePublicBaseUrl(
+          process.env.FRONTEND_URL || process.env.CLIENT_URL,
+          'http://localhost:3000'
+        );
+        const apiBase = normalizePublicBaseUrl(
+          process.env.API_URL || process.env.RAILWAY_PUBLIC_DOMAIN,
+          'http://localhost:3001'
+        );
         const invoice = await moyasarService.createInvoice({
           amount: modulePrice.priceCents,
           currency: modulePrice.currency,
@@ -462,8 +476,14 @@ router.put('/:id/plan', requirePermission('subscriptions.manage'), async (req, r
 
     if (moyasarConfigured && paidPlan) {
       try {
-        const frontendUrl = process.env.FRONTEND_URL || process.env.CLIENT_URL || 'http://localhost:3000';
-        const apiBase = process.env.API_URL || 'http://localhost:3001';
+        const frontendUrl = normalizePublicBaseUrl(
+          process.env.FRONTEND_URL || process.env.CLIENT_URL,
+          'http://localhost:3000'
+        );
+        const apiBase = normalizePublicBaseUrl(
+          process.env.API_URL || process.env.RAILWAY_PUBLIC_DOMAIN,
+          'http://localhost:3001'
+        );
         const invoice = await moyasarService.createInvoice({
           amount: modulePrice.priceCents,
           currency: modulePrice.currency,
