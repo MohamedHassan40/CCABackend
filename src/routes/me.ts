@@ -167,7 +167,7 @@ router.get('/', authMiddleware, async (req: Request, res: Response) => {
         position: true,
         photoUrl: true,
         department: true,
-        departmentRef: { select: { id: true, name: true } },
+        departmentRef: { select: { id: true, name: true, nameAr: true } },
       },
     });
 

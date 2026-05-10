@@ -51,7 +51,7 @@ router.get('/workspace', authMiddleware, async (req: Request, res: Response) => 
         photoUrl: true,
         email: true,
         department: true,
-        departmentRef: { select: { id: true, name: true } },
+        departmentRef: { select: { id: true, name: true, nameAr: true } },
       },
     });
 

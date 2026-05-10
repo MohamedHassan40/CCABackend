@@ -446,6 +446,7 @@ router.get('/employees', requirePermission('hr.employees.view'), async (req, res
         { country: { contains: search, mode: 'insensitive' } },
         { governmentId: { contains: search, mode: 'insensitive' } },
         { departmentRef: { name: { contains: search, mode: 'insensitive' } } },
+        { departmentRef: { nameAr: { contains: search, mode: 'insensitive' } } },
         { reportsTo: { fullName: { contains: search, mode: 'insensitive' } } },
       ];
     }
@@ -457,7 +458,7 @@ router.get('/employees', requirePermission('hr.employees.view'), async (req, res
         take: limit,
         skip,
         include: {
-          departmentRef: { select: { id: true, name: true } },
+          departmentRef: { select: { id: true, name: true, nameAr: true } },
           reportsTo: { select: { id: true, fullName: true, employeeCode: true } },
         },
       }),
@@ -495,6 +496,7 @@ router.get('/employees/export', requirePermission('hr.employees.view'), async (r
         { country: { contains: search, mode: 'insensitive' } },
         { governmentId: { contains: search, mode: 'insensitive' } },
         { departmentRef: { name: { contains: search, mode: 'insensitive' } } },
+        { departmentRef: { nameAr: { contains: search, mode: 'insensitive' } } },
         { reportsTo: { fullName: { contains: search, mode: 'insensitive' } } },
       ];
     }
@@ -504,7 +506,7 @@ router.get('/employees/export', requirePermission('hr.employees.view'), async (r
       orderBy: { createdAt: 'desc' },
       take: 10000,
       include: {
-        departmentRef: { select: { id: true, name: true } },
+        departmentRef: { select: { id: true, name: true, nameAr: true } },
         reportsTo: { select: { id: true, fullName: true, employeeCode: true } },
       },
     });
@@ -1428,7 +1430,7 @@ router.get('/employees/:id', requirePermission('hr.employees.view'), async (req,
           },
         },
         departmentRef: {
-          select: { id: true, name: true, description: true, parentDepartmentId: true },
+          select: { id: true, name: true, nameAr: true, description: true, parentDepartmentId: true },
         },
         reportsTo: {
           select: { id: true, fullName: true, employeeCode: true, position: true, photoUrl: true },

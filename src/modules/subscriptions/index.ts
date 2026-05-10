@@ -2,9 +2,19 @@ import { Router } from 'express';
 import prisma from '../../core/db';
 import { authMiddleware } from '../../middleware/auth';
 import { requirePermission } from '../../middleware/permissions';
+import { activateSubscriptionFromPaidMoyasarInvoice } from '../../core/payments/subscription-payment-callback';
 import { getInvoiceCheckoutUrl, moyasarService } from '../../core/payments/moyasar';
+import type { MoyasarInvoiceStatus } from '../../core/payments/moyasar';
 
 const router = Router();
+
+const STALE_INVOICE_STATUSES: MoyasarInvoiceStatus[] = [
+  'expired',
+  'failed',
+  'canceled',
+  'voided',
+  'refunded',
+];
 
 function normalizePublicBaseUrl(value: string | undefined, fallback: string): string {
   const raw = (value || '').trim();
@@ -110,14 +120,61 @@ router.post('/subscribe', requirePermission('subscriptions.manage'), async (req,
       });
 
       if (existingPending?.invoiceUrl && existingPending.providerRef) {
-        res.json({
-          invoiceUrl: existingPending.invoiceUrl,
-          invoiceId: existingPending.providerRef,
-          paymentId: existingPending.id,
-          message: 'Complete payment to activate subscription',
-          resumed: true,
-        });
-        return;
+        try {
+          const remoteInvoice = await moyasarService.getInvoiceById(existingPending.providerRef);
+
+          if (remoteInvoice.status === 'paid') {
+            const activated = await activateSubscriptionFromPaidMoyasarInvoice(remoteInvoice, {});
+            if (activated.ok) {
+              res.json({
+                message:
+                  'Subscription activated. Your payment was already completed; status has been synced from Moyasar.',
+                subscription: activated.subscription,
+                syncedFromMoyasar: true,
+              });
+              return;
+            }
+            res.status(400).json({ error: activated.error });
+            return;
+          }
+
+          const status = remoteInvoice.status;
+          const pastExpiry =
+            !!remoteInvoice.expired_at &&
+            !Number.isNaN(Date.parse(remoteInvoice.expired_at)) &&
+            new Date(remoteInvoice.expired_at).getTime() < Date.now();
+
+          const stale =
+            (!!status && STALE_INVOICE_STATUSES.includes(status as MoyasarInvoiceStatus)) ||
+            pastExpiry;
+
+          if (stale) {
+            await prisma.payment.update({
+              where: { id: existingPending.id },
+              data: { status: 'failed' },
+            });
+            // Create a fresh invoice below (do not return the expired checkout link).
+          } else {
+            res.json({
+              invoiceUrl: existingPending.invoiceUrl,
+              invoiceId: existingPending.providerRef,
+              paymentId: existingPending.id,
+              message: 'Complete payment to activate subscription',
+              resumed: true,
+            });
+            return;
+          }
+        } catch (e) {
+          console.warn('Could not verify pending Moyasar invoice; returning saved checkout URL:', e);
+          res.json({
+            invoiceUrl: existingPending.invoiceUrl,
+            invoiceId: existingPending.providerRef,
+            paymentId: existingPending.id,
+            message: 'Complete payment to activate subscription',
+            resumed: true,
+          });
+          return;
+        }
       }
 
       try {

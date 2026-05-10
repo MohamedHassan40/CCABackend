@@ -108,6 +108,8 @@ router.post('/', requirePermission('hr.employees.edit'), async (req, res) => {
     }
     const description =
       typeof req.body.description === 'string' ? req.body.description.trim() || null : null;
+    const nameAr =
+      typeof req.body.nameAr === 'string' ? req.body.nameAr.trim() || null : null;
     const parentDepartmentId =
       typeof req.body.parentDepartmentId === 'string' && req.body.parentDepartmentId.trim()
         ? req.body.parentDepartmentId.trim()
@@ -131,6 +133,7 @@ router.post('/', requirePermission('hr.employees.edit'), async (req, res) => {
       data: {
         orgId,
         name,
+        nameAr,
         description,
         parentDepartmentId,
         sortOrder,
@@ -218,9 +221,15 @@ router.put('/:id', requirePermission('hr.employees.edit'), async (req, res) => {
         ? Math.floor(req.body.sortOrder)
         : existing.sortOrder;
 
+    let nameAr = existing.nameAr;
+    if (req.body.nameAr !== undefined) {
+      nameAr =
+        typeof req.body.nameAr === 'string' ? req.body.nameAr.trim() || null : null;
+    }
+
     const updated = await prisma.department.update({
       where: { id },
-      data: { name, description, parentDepartmentId, sortOrder },
+      data: { name, nameAr, description, parentDepartmentId, sortOrder },
     });
     res.json(updated);
   } catch (e) {
