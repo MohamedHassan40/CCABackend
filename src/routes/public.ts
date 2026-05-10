@@ -3,6 +3,26 @@ import prisma from '../core/db';
 
 const router = Router();
 
+/** Aggregate counts for marketing / landing (no auth). */
+router.get('/platform-stats', async (_req: Request, res: Response) => {
+  try {
+    const [organizationCount, moduleSubscriptionsCount, userCount] = await Promise.all([
+      prisma.organization.count(),
+      prisma.orgModule.count({ where: { isEnabled: true } }),
+      prisma.user.count({ where: { isSuperAdmin: false } }),
+    ]);
+
+    res.json({
+      organizationCount,
+      moduleSubscriptionsCount,
+      userCount,
+    });
+  } catch (error) {
+    console.error('Error fetching platform stats:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 // GET /api/public/modules - Public endpoint to get available modules with pricing
 router.get('/modules', async (req: Request, res: Response) => {
   try {
