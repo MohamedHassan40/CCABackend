@@ -188,6 +188,26 @@ async function main() {
     },
   });
 
+  const ticketingEmployeeRole = await prisma.role.upsert({
+    where: { key: 'ticketing.employee' },
+    update: {},
+    create: {
+      key: 'ticketing.employee',
+      name: 'Ticketing Employee',
+      description: 'Submit and track own support tickets',
+    },
+  });
+
+  const hrEmployeeRole = await prisma.role.upsert({
+    where: { key: 'hr.employee' },
+    update: {},
+    create: {
+      key: 'hr.employee',
+      name: 'HR Employee',
+      description: 'Self-service: leave, time off, and employee requests (linked HR profile required)',
+    },
+  });
+
   const marketplaceManagerRole = await prisma.role.upsert({
     where: { key: 'marketplace.manager' },
     update: {},
@@ -368,9 +388,12 @@ async function main() {
     { key: 'hr.requests.delete', name: 'Delete Employee Requests' },
     // Ticketing permissions
     { key: 'ticketing.tickets.view', name: 'View Tickets' },
+    { key: 'ticketing.tickets.view_own', name: 'View Own Tickets' },
     { key: 'ticketing.tickets.create', name: 'Create Tickets' },
     { key: 'ticketing.tickets.edit', name: 'Edit Tickets' },
     { key: 'ticketing.tickets.delete', name: 'Delete Tickets' },
+    // HR self-service (employee portal; no HR admin screens)
+    { key: 'hr.self_service', name: 'HR Employee Self-Service' },
     // Platform subscriptions (CCA module licensing — not the org Billing module)
     { key: 'subscriptions.view', name: 'View Platform Subscriptions' },
     { key: 'subscriptions.manage', name: 'Manage Platform Subscriptions' },
@@ -606,6 +629,42 @@ async function main() {
     });
   }
 
+  const ticketingEmployeePerms = createdPermissions.filter((p) =>
+    ['ticketing.tickets.create', 'ticketing.tickets.view_own'].includes(p.key)
+  );
+  for (const perm of ticketingEmployeePerms) {
+    await prisma.rolePermission.upsert({
+      where: {
+        roleId_permissionId: {
+          roleId: ticketingEmployeeRole.id,
+          permissionId: perm.id,
+        },
+      },
+      update: {},
+      create: {
+        roleId: ticketingEmployeeRole.id,
+        permissionId: perm.id,
+      },
+    });
+  }
+
+  const hrSelfServicePerm = createdPermissions.find((p) => p.key === 'hr.self_service');
+  if (hrSelfServicePerm) {
+    await prisma.rolePermission.upsert({
+      where: {
+        roleId_permissionId: {
+          roleId: hrEmployeeRole.id,
+          permissionId: hrSelfServicePerm.id,
+        },
+      },
+      update: {},
+      create: {
+        roleId: hrEmployeeRole.id,
+        permissionId: hrSelfServicePerm.id,
+      },
+    });
+  }
+
   // Marketplace, Inventory, PMO viewers
   const viewOnlyPerms = createdPermissions.filter((p) =>
     (p.key.startsWith('marketplace.') || p.key.startsWith('inventory.') || p.key.startsWith('pmo.')) && p.key.endsWith('.view')
@@ -716,20 +775,13 @@ async function main() {
 
   console.log('✅ Assigned permissions to roles\n');
 
-  // Default org member: can open support tickets (view aggregated on employee dashboard via /api/me/workspace)
-  const ticketingCreatePerm = createdPermissions.find((p) => p.key === 'ticketing.tickets.create');
-  if (ticketingCreatePerm) {
-    await prisma.rolePermission.upsert({
+  // Org "member" is a basic login role only — use ticketing.employee / hr.employee for staff self-service.
+  const ticketingCreateOnMember = createdPermissions.find((p) => p.key === 'ticketing.tickets.create');
+  if (ticketingCreateOnMember) {
+    await prisma.rolePermission.deleteMany({
       where: {
-        roleId_permissionId: {
-          roleId: memberRole.id,
-          permissionId: ticketingCreatePerm.id,
-        },
-      },
-      update: {},
-      create: {
         roleId: memberRole.id,
-        permissionId: ticketingCreatePerm.id,
+        permissionId: ticketingCreateOnMember.id,
       },
     });
   }

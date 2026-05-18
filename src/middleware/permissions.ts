@@ -74,6 +74,68 @@ export function requirePermission(permissionKey: string) {
   };
 }
 
+/** Pass if the user has at least one of the listed permissions (super admin bypasses). */
+export function requireAnyPermission(...permissionKeys: string[]) {
+  return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      if (!req.user || !req.org) {
+        res.status(401).json({ error: 'Authentication required' });
+        return;
+      }
+
+      if (req.user.isSuperAdmin) {
+        next();
+        return;
+      }
+
+      const membership = await prisma.membership.findUnique({
+        where: {
+          userId_organizationId: {
+            userId: req.user.id,
+            organizationId: req.org.id,
+          },
+        },
+        include: {
+          membershipRoles: {
+            include: {
+              role: {
+                include: {
+                  rolePermissions: { include: { permission: true } },
+                },
+              },
+            },
+          },
+        },
+      });
+
+      if (!membership?.isActive) {
+        res.status(403).json({ error: 'No active membership found' });
+        return;
+      }
+
+      const userKeys = new Set<string>();
+      for (const mr of membership.membershipRoles) {
+        for (const rp of mr.role.rolePermissions) {
+          userKeys.add(rp.permission.key);
+        }
+      }
+
+      const allowed = permissionKeys.some((k) => userKeys.has(k));
+      if (!allowed) {
+        res.status(403).json({
+          error: `Permission required (one of): ${permissionKeys.join(', ')}`,
+        });
+        return;
+      }
+
+      next();
+    } catch (error) {
+      console.error('Error in requireAnyPermission middleware:', error);
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  };
+}
+
 /**
  * Middleware to require super admin access
  */

@@ -2,7 +2,13 @@ import { Router } from 'express';
 import prisma from '../../core/db';
 import { authMiddleware } from '../../middleware/auth';
 import { requireModuleEnabled } from '../../middleware/modules';
-import { requirePermission } from '../../middleware/permissions';
+import { requireAnyPermission, requirePermission } from '../../middleware/permissions';
+import {
+  canViewAllOrgTickets,
+  getUserPermissionKeys,
+  isOwnTicketsScopeOnly,
+  ownTicketsFilter,
+} from '../../core/permissions/membershipPermissions';
 import { moduleRegistry } from '../../core/modules/registry';
 import { createNotification } from '../../core/notifications/helper';
 import { createAuditLog } from '../../middleware/audit';
@@ -88,18 +94,29 @@ async function recordTicketHistory(
 }
 
 // GET /api/ticketing/tickets
-router.get('/tickets', requirePermission('ticketing.tickets.view'), async (req, res) => {
+router.get(
+  '/tickets',
+  requireAnyPermission('ticketing.tickets.view', 'ticketing.tickets.view_own'),
+  async (req, res) => {
   try {
     if (!req.org || !req.user) {
       res.status(401).json({ error: 'Unauthorized' });
       return;
     }
 
+    const permissionKeys = req.user.isSuperAdmin
+      ? new Set<string>(['ticketing.tickets.view'])
+      : await getUserPermissionKeys(req.user.id, req.org.id);
+
     const { status, priority, categoryId, search, tag, parentId, assigneeId } = req.query;
 
     const where: any = {
       orgId: req.org.id,
     };
+
+    if (isOwnTicketsScopeOnly(permissionKeys)) {
+      Object.assign(where, ownTicketsFilter(req.user.id));
+    }
 
     if (status) {
       where.status = status;
@@ -564,8 +581,23 @@ router.delete('/tickets/:id', requirePermission('ticketing.tickets.delete'), asy
   }
 });
 
+async function assertCanAccessTicket(
+  req: { user?: { id: string; isSuperAdmin?: boolean }; org?: { id: string } },
+  ticket: { createdById: string | null; assigneeId: string | null }
+): Promise<boolean> {
+  if (!req.user || !req.org) return false;
+  if (req.user.isSuperAdmin) return true;
+  const keys = await getUserPermissionKeys(req.user.id, req.org.id);
+  if (canViewAllOrgTickets(keys)) return true;
+  if (!isOwnTicketsScopeOnly(keys)) return false;
+  return ticket.createdById === req.user.id || ticket.assigneeId === req.user.id;
+}
+
 // GET /api/ticketing/tickets/:id - Get single ticket with details
-router.get('/tickets/:id', requirePermission('ticketing.tickets.view'), async (req, res) => {
+router.get(
+  '/tickets/:id',
+  requireAnyPermission('ticketing.tickets.view', 'ticketing.tickets.view_own'),
+  async (req, res) => {
   try {
     if (!req.org || !req.user) {
       res.status(401).json({ error: 'Unauthorized' });
@@ -680,6 +712,12 @@ router.get('/tickets/:id', requirePermission('ticketing.tickets.view'), async (r
 
     if (!ticket) {
       res.status(404).json({ error: 'Ticket not found' });
+      return;
+    }
+
+    const allowed = await assertCanAccessTicket(req, ticket);
+    if (!allowed) {
+      res.status(403).json({ error: 'You do not have access to this ticket' });
       return;
     }
 

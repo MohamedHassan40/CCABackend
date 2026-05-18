@@ -3,8 +3,31 @@ import prisma from '../core/db';
 import { authMiddleware } from '../middleware/auth';
 import { requireModuleEnabled } from '../middleware/modules';
 import { submitLeaveRequestForEmployee } from '../modules/hr/leaveRequestSubmit';
+import { getUserPermissionKeys } from '../core/permissions/membershipPermissions';
 
 const router = Router();
+
+async function requireHrSelfService(req: Request, res: Response): Promise<boolean> {
+  if (!req.user || !req.org) {
+    res.status(401).json({ error: 'Unauthorized' });
+    return false;
+  }
+  if (req.user.isSuperAdmin) return true;
+  const keys = await getUserPermissionKeys(req.user.id, req.org.id);
+  if (keys.has('hr.self_service')) return true;
+  // Legacy: linked employee with any HR admin permission
+  if (
+    keys.has('hr.leave.create') ||
+    keys.has('hr.requests.create') ||
+    keys.has('hr.employees.view')
+  ) {
+    return true;
+  }
+  res.status(403).json({
+    error: 'HR employee self-service role required (assign HR Employee role)',
+  });
+  return false;
+}
 
 async function requireLinkedEmployee(req: Request, res: Response) {
   if (!req.user || !req.org) {
@@ -154,6 +177,7 @@ router.get('/workspace', authMiddleware, async (req: Request, res: Response) => 
 
 router.get('/hr-self/leave-types', authMiddleware, requireModuleEnabled('hr'), async (req: Request, res: Response) => {
   try {
+    if (!(await requireHrSelfService(req, res))) return;
     const emp = await requireLinkedEmployee(req, res);
     if (!emp) return;
 
@@ -170,6 +194,7 @@ router.get('/hr-self/leave-types', authMiddleware, requireModuleEnabled('hr'), a
 
 router.get('/hr-self/leave-requests', authMiddleware, requireModuleEnabled('hr'), async (req: Request, res: Response) => {
   try {
+    if (!(await requireHrSelfService(req, res))) return;
     const emp = await requireLinkedEmployee(req, res);
     if (!emp) return;
 
@@ -191,6 +216,7 @@ router.get('/hr-self/leave-requests', authMiddleware, requireModuleEnabled('hr')
 
 router.post('/hr-self/leave-requests', authMiddleware, requireModuleEnabled('hr'), async (req: Request, res: Response) => {
   try {
+    if (!(await requireHrSelfService(req, res))) return;
     const emp = await requireLinkedEmployee(req, res);
     if (!emp) return;
 
@@ -223,6 +249,7 @@ router.post('/hr-self/leave-requests', authMiddleware, requireModuleEnabled('hr'
 
 router.get('/hr-self/employee-requests', authMiddleware, requireModuleEnabled('hr'), async (req: Request, res: Response) => {
   try {
+    if (!(await requireHrSelfService(req, res))) return;
     const emp = await requireLinkedEmployee(req, res);
     if (!emp) return;
 
@@ -244,6 +271,7 @@ router.get('/hr-self/employee-requests', authMiddleware, requireModuleEnabled('h
 
 router.post('/hr-self/employee-requests', authMiddleware, requireModuleEnabled('hr'), async (req: Request, res: Response) => {
   try {
+    if (!(await requireHrSelfService(req, res))) return;
     const emp = await requireLinkedEmployee(req, res);
     if (!emp || !req.user) return;
 

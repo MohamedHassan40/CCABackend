@@ -4,6 +4,13 @@ import { requirePermission } from '../../middleware/permissions';
 
 const router = Router();
 
+function parseOverallRating(rating: unknown): number | null | 'invalid' {
+  if (rating === undefined || rating === null || rating === '') return null;
+  const n = Number(rating);
+  if (!Number.isInteger(n) || n < 1 || n > 5) return 'invalid';
+  return n;
+}
+
 // ============================================
 // PERFORMANCE REVIEWS
 // ============================================
@@ -150,6 +157,12 @@ router.post('/reviews', requirePermission('hr.performance.create'), async (req, 
       return;
     }
 
+    const parsedRating = parseOverallRating(overallRating);
+    if (parsedRating === 'invalid') {
+      res.status(400).json({ error: 'Overall rating must be between 1 and 5' });
+      return;
+    }
+
     const review = await prisma.performanceReview.create({
       data: {
         orgId: req.org.id,
@@ -157,7 +170,7 @@ router.post('/reviews', requirePermission('hr.performance.create'), async (req, 
         reviewPeriodStart: new Date(reviewPeriodStart),
         reviewPeriodEnd: new Date(reviewPeriodEnd),
         reviewType: reviewType || 'annual',
-        overallRating: overallRating || null,
+        overallRating: parsedRating,
         strengths: strengths || null,
         areasForImprovement: areasForImprovement || null,
         goals: goals || null,
@@ -219,8 +232,16 @@ router.put('/reviews/:id', requirePermission('hr.performance.edit'), async (req,
       return;
     }
 
+    if (overallRating !== undefined) {
+      const parsedRating = parseOverallRating(overallRating);
+      if (parsedRating === 'invalid') {
+        res.status(400).json({ error: 'Overall rating must be between 1 and 5' });
+        return;
+      }
+    }
+
     const updateData: any = {
-      ...(overallRating !== undefined && { overallRating }),
+      ...(overallRating !== undefined && { overallRating: parseOverallRating(overallRating) }),
       ...(strengths !== undefined && { strengths }),
       ...(areasForImprovement !== undefined && { areasForImprovement }),
       ...(goals !== undefined && { goals }),

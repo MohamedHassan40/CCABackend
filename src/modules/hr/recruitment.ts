@@ -413,6 +413,14 @@ router.put('/applications/:id', requirePermission('hr.recruitment.manage'), asyn
       return;
     }
 
+    if (rating !== undefined && rating !== null && rating !== '') {
+      const n = Number(rating);
+      if (!Number.isInteger(n) || n < 1 || n > 5) {
+        res.status(400).json({ error: 'Rating must be between 1 and 5' });
+        return;
+      }
+    }
+
     const previousStatus = application.status;
 
     const updated = await prisma.jobApplication.update({
@@ -421,7 +429,7 @@ router.put('/applications/:id', requirePermission('hr.recruitment.manage'), asyn
         ...(status && { status }),
         ...(interviewDate !== undefined && { interviewDate: interviewDate ? new Date(interviewDate) : null }),
         ...(interviewNotes !== undefined && { interviewNotes }),
-        ...(rating !== undefined && { rating }),
+        ...(rating !== undefined && { rating: rating === null || rating === '' ? null : Number(rating) }),
         ...(notes !== undefined && { notes }),
       },
       include: {

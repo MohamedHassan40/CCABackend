@@ -344,7 +344,16 @@ router.get('/modules', authMiddleware, async (req: Request, res: Response) => {
       // Filter sidebar items and widgets by permissions
       const filteredSidebarItems = manifest.sidebarItems.filter((item) => {
         if (!item.permission) return true;
-        return hasAllPermissions || userPermissionKeys.has(item.permission);
+        if (hasAllPermissions || userPermissionKeys.has(item.permission)) return true;
+        // Staff ticket role: own tickets only — show main Tickets nav, not admin sub-pages
+        if (
+          manifest.key === 'ticketing' &&
+          item.path === '/ticketing/tickets' &&
+          userPermissionKeys.has('ticketing.tickets.view_own')
+        ) {
+          return true;
+        }
+        return false;
       });
 
       const filteredWidgets = manifest.dashboardWidgets.filter((widget) => {
