@@ -1,4 +1,6 @@
 import { Router, Request, Response } from 'express';
+import crypto from 'crypto';
+import QRCode from 'qrcode';
 import prisma from '../core/db';
 import { authMiddleware } from '../middleware/auth';
 import { requireModuleEnabled } from '../middleware/modules';
@@ -6,6 +8,40 @@ import { submitLeaveRequestForEmployee } from '../modules/hr/leaveRequestSubmit'
 import { getUserPermissionKeys } from '../core/permissions/membershipPermissions';
 
 const router = Router();
+
+const frontendUrl = () => process.env.FRONTEND_URL || process.env.CLIENT_URL || 'http://localhost:3000';
+
+function generateQrToken(): string {
+  return crypto.randomBytes(12).toString('base64url');
+}
+
+function formatMembershipNumber(
+  prefix: string | null | undefined,
+  padLength: number | null | undefined,
+  seq: number | null | undefined
+): string | null {
+  if (seq == null) return null;
+  const pad = Math.min(Math.max(padLength ?? 5, 1), 12);
+  const num = String(seq).padStart(pad, '0');
+  const p = (prefix ?? '').trim();
+  if (!p) return num;
+  return `${p}-${num}`;
+}
+
+function applicantEmails(employeeEmail: string | null | undefined, userEmail: string | null | undefined) {
+  return [
+    ...new Set(
+      [employeeEmail, userEmail]
+        .map((e) => (typeof e === 'string' ? e.trim() : ''))
+        .filter(Boolean)
+    ),
+  ];
+}
+
+function daysUntil(date: Date): number {
+  const ms = date.getTime() - Date.now();
+  return Math.max(0, Math.ceil(ms / (1000 * 60 * 60 * 24)));
+}
 
 async function requireHrSelfService(req: Request, res: Response): Promise<boolean> {
   if (!req.user || !req.org) {
@@ -73,8 +109,13 @@ router.get('/workspace', authMiddleware, async (req: Request, res: Response) => 
         position: true,
         photoUrl: true,
         email: true,
+        phone: true,
+        hireDate: true,
+        salary: true,
+        employmentType: true,
         department: true,
         departmentRef: { select: { id: true, name: true, nameAr: true } },
+        reportsTo: { select: { id: true, fullName: true, employeeCode: true } },
       },
     });
 
@@ -85,19 +126,41 @@ router.get('/workspace', authMiddleware, async (req: Request, res: Response) => 
         employeeRequests: [],
         jobApplications: [],
         tickets: [],
+        leaveBalances: [],
+        stats: null,
+        membership: null,
+        recentPayroll: null,
       });
       return;
     }
 
-    const applicantMatch = [
-      ...new Set(
-        [employee.email, req.user.email]
-          .map((e) => (typeof e === 'string' ? e.trim() : ''))
-          .filter(Boolean)
-      ),
-    ];
+    const applicantMatch = applicantEmails(employee.email, req.user.email);
+    const currentYear = new Date().getFullYear();
+    const ticketWhere = {
+      orgId: req.org.id,
+      OR: [
+        { assigneeId: req.user.id },
+        { createdById: req.user.id },
+        ...applicantMatch.map((email) => ({
+          submittedByEmail: { equals: email, mode: 'insensitive' as const },
+        })),
+      ],
+    };
 
-    const [leaveRequests, employeeRequests, jobApplications, tickets] = await Promise.all([
+    const [
+      leaveRequests,
+      employeeRequests,
+      jobApplications,
+      tickets,
+      leaveBalances,
+      ticketTotal,
+      ticketOpen,
+      pendingLeaveCount,
+      pendingRequestCount,
+      activeAssetCount,
+      recentPayroll,
+      membershipRecord,
+    ] = await Promise.all([
       prisma.leaveRequest.findMany({
         where: { orgId: req.org.id, employeeId: employee.id },
         take: 25,
@@ -132,16 +195,7 @@ router.get('/workspace', authMiddleware, async (req: Request, res: Response) => 
         },
       }),
       prisma.ticket.findMany({
-        where: {
-          orgId: req.org.id,
-          OR: [
-            { assigneeId: req.user.id },
-            { createdById: req.user.id },
-            ...applicantMatch.map((email) => ({
-              submittedByEmail: { equals: email, mode: 'insensitive' as const },
-            })),
-          ],
-        },
+        where: ticketWhere,
         take: 25,
         orderBy: { updatedAt: 'desc' },
         select: {
@@ -158,7 +212,70 @@ router.get('/workspace', authMiddleware, async (req: Request, res: Response) => 
           category: { select: { id: true, name: true, color: true } },
         },
       }),
+      prisma.leaveBalance.findMany({
+        where: { orgId: req.org.id, employeeId: employee.id, year: currentYear },
+        include: { leaveType: { select: { id: true, name: true, isPaid: true } } },
+        orderBy: { leaveType: { name: 'asc' } },
+      }),
+      prisma.ticket.count({ where: ticketWhere }),
+      prisma.ticket.count({
+        where: {
+          ...ticketWhere,
+          status: { in: ['open', 'in_progress', 'pending'] },
+        },
+      }),
+      prisma.leaveRequest.count({
+        where: { orgId: req.org.id, employeeId: employee.id, status: 'pending' },
+      }),
+      prisma.employeeRequest.count({
+        where: { orgId: req.org.id, employeeId: employee.id, status: 'pending' },
+      }),
+      prisma.inventoryAssignment.count({
+        where: { orgId: req.org.id, employeeId: employee.id, status: 'active' },
+      }),
+      prisma.payrollRecord.findFirst({
+        where: { orgId: req.org.id, employeeId: employee.id, status: { in: ['paid', 'approved'] } },
+        orderBy: { payPeriodEnd: 'desc' },
+        select: {
+          id: true,
+          payPeriodStart: true,
+          payPeriodEnd: true,
+          netSalary: true,
+          currency: true,
+          status: true,
+          paidAt: true,
+        },
+      }),
+      applicantMatch.length > 0
+        ? prisma.memberMembership.findFirst({
+            where: {
+              orgId: req.org.id,
+              status: { in: ['active', 'pending'] },
+              OR: applicantMatch.map((email) => ({
+                memberEmail: { equals: email, mode: 'insensitive' as const },
+              })),
+            },
+            orderBy: { endDate: 'desc' },
+            include: {
+              membershipType: { select: { id: true, name: true } },
+            },
+          })
+        : Promise.resolve(null),
     ]);
+
+    const vacationDaysRemaining = leaveBalances.reduce((sum, b) => sum + b.remainingDays, 0);
+
+    const membership = membershipRecord
+      ? {
+          id: membershipRecord.id,
+          memberName: membershipRecord.memberName,
+          status: membershipRecord.status,
+          membershipTypeName: membershipRecord.membershipType.name,
+          startDate: membershipRecord.startDate,
+          endDate: membershipRecord.endDate,
+          daysRemaining: daysUntil(membershipRecord.endDate),
+        }
+      : null;
 
     res.json({
       employee,
@@ -166,10 +283,202 @@ router.get('/workspace', authMiddleware, async (req: Request, res: Response) => 
       employeeRequests,
       jobApplications,
       tickets,
+      leaveBalances,
+      stats: {
+        vacationDaysRemaining,
+        pendingLeaveRequests: pendingLeaveCount,
+        pendingEmployeeRequests: pendingRequestCount,
+        ticketCount: ticketTotal,
+        openTicketCount: ticketOpen,
+        activeAssetCount,
+      },
+      membership,
+      recentPayroll,
     });
   } catch (error) {
     console.error('Error in GET /api/me/workspace:', error);
     res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// GET /api/me/membership-card — own digital membership card (matched by employee/user email)
+router.get('/membership-card', authMiddleware, async (req: Request, res: Response) => {
+  try {
+    if (!req.user || !req.org) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+
+    const employee = await prisma.employee.findFirst({
+      where: { orgId: req.org.id, userId: req.user.id },
+      select: { email: true },
+    });
+    const emails = applicantEmails(employee?.email, req.user.email);
+    if (emails.length === 0) {
+      res.status(404).json({ error: 'No membership linked to your account email' });
+      return;
+    }
+
+    const membership = await prisma.memberMembership.findFirst({
+      where: {
+        orgId: req.org.id,
+        status: { in: ['active', 'pending'] },
+        OR: emails.map((email) => ({
+          memberEmail: { equals: email, mode: 'insensitive' as const },
+        })),
+      },
+      orderBy: { endDate: 'desc' },
+      include: {
+        membershipType: { include: { cardDesign: true } },
+        cardDesign: true,
+        organization: {
+          select: {
+            name: true,
+            slug: true,
+            membershipNumberPrefix: true,
+            membershipNumberPadLength: true,
+          },
+        },
+      },
+    });
+
+    if (!membership) {
+      res.status(404).json({ error: 'No membership linked to your account email' });
+      return;
+    }
+
+    const membershipNumberDisplay = formatMembershipNumber(
+      membership.organization.membershipNumberPrefix,
+      membership.organization.membershipNumberPadLength,
+      membership.membershipSeq
+    );
+
+    let qrToken = membership.qrToken;
+    if (!qrToken) {
+      qrToken = generateQrToken();
+      await prisma.memberMembership.update({
+        where: { id: membership.id },
+        data: { qrToken },
+      });
+    }
+
+    let design =
+      membership.membershipType.cardDesign ?? membership.cardDesign ?? null;
+    if (!design) {
+      design = await prisma.membershipCardDesign.findFirst({
+        where: { orgId: req.org.id, isDefault: true },
+      });
+    }
+    if (!design) {
+      design = await prisma.membershipCardDesign.findFirst({
+        where: { orgId: req.org.id },
+      });
+    }
+
+    const verifyUrl = `${frontendUrl()}/verify/membership/${qrToken}`;
+
+    res.json({
+      membership: {
+        id: membership.id,
+        memberName: membership.memberName,
+        memberEmail: membership.memberEmail,
+        memberPhone: membershipNumberDisplay ? null : membership.memberPhone,
+        membershipNumberDisplay,
+        status: membership.status,
+        startDate: membership.startDate,
+        endDate: membership.endDate,
+        qrToken,
+        membershipType: membership.membershipType,
+        organization: membership.organization,
+      },
+      design: design
+        ? {
+            id: design.id,
+            name: design.name,
+            layout: design.layout,
+            primaryColor: design.primaryColor,
+            secondaryColor: design.secondaryColor,
+            accentColor: design.accentColor,
+            logoUrl: design.logoUrl,
+            showQR: design.showQR,
+            qrPosition: design.qrPosition,
+            showMemberId: design.showMemberId,
+            memberIdPrefix: design.memberIdPrefix,
+            fontFamily: design.fontFamily,
+          }
+        : {
+            name: 'Default',
+            layout: 'standard',
+            primaryColor: '#1e3a5f',
+            secondaryColor: '#3b82f6',
+            accentColor: null,
+            logoUrl: null,
+            showQR: true,
+            qrPosition: 'right',
+            showMemberId: true,
+            memberIdPrefix: null,
+            fontFamily: 'sans-serif',
+          },
+      verifyUrl,
+    });
+  } catch (error) {
+    console.error('Error in GET /api/me/membership-card:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// GET /api/me/membership-card/qr — QR image for own membership card
+router.get('/membership-card/qr', authMiddleware, async (req: Request, res: Response) => {
+  try {
+    if (!req.user || !req.org) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+
+    const employee = await prisma.employee.findFirst({
+      where: { orgId: req.org.id, userId: req.user.id },
+      select: { email: true },
+    });
+    const emails = applicantEmails(employee?.email, req.user.email);
+    if (emails.length === 0) {
+      res.status(404).json({ error: 'No membership linked to your account email' });
+      return;
+    }
+
+    const membership = await prisma.memberMembership.findFirst({
+      where: {
+        orgId: req.org.id,
+        status: { in: ['active', 'pending'] },
+        OR: emails.map((email) => ({
+          memberEmail: { equals: email, mode: 'insensitive' as const },
+        })),
+      },
+      orderBy: { endDate: 'desc' },
+      select: { id: true, qrToken: true },
+    });
+
+    if (!membership) {
+      res.status(404).json({ error: 'No membership linked to your account email' });
+      return;
+    }
+
+    let qrToken = membership.qrToken;
+    if (!qrToken) {
+      qrToken = generateQrToken();
+      await prisma.memberMembership.update({
+        where: { id: membership.id },
+        data: { qrToken },
+      });
+    }
+
+    const verifyUrl = `${frontendUrl()}/membership/verify/${qrToken}`;
+    const pngBuffer = await QRCode.toBuffer(verifyUrl, { type: 'png', width: 256, margin: 2 });
+
+    res.set('Content-Type', 'image/png');
+    res.send(pngBuffer);
+  } catch (error: any) {
+    console.error('Error in GET /api/me/membership-card/qr:', error);
+    res.status(500).json({ error: error.message || 'Internal server error' });
   }
 });
 
