@@ -3,6 +3,7 @@ import prisma from '../../core/db';
 import { requirePermission } from '../../middleware/permissions';
 import { createNotification } from '../../core/notifications/helper';
 import { createAuditLog } from '../../middleware/audit';
+import { generatePayslipPdf } from './payslipPdf';
 
 const router = Router();
 
@@ -351,6 +352,51 @@ router.put('/:id', requirePermission('hr.payroll.edit'), async (req, res) => {
     res.json(updated);
   } catch (error) {
     console.error('Error updating payroll record:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// GET /api/hr/payroll/:id/payslip - Download payslip PDF
+router.get('/:id/payslip', requirePermission('hr.payroll.view'), async (req, res) => {
+  try {
+    if (!req.org) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+
+    const { id } = req.params;
+    const payrollRecord = await prisma.payrollRecord.findFirst({
+      where: { id, orgId: req.org.id },
+      include: {
+        employee: { select: { fullName: true, email: true } },
+      },
+    });
+
+    if (!payrollRecord) {
+      res.status(404).json({ error: 'Payroll record not found' });
+      return;
+    }
+
+    const pdf = await generatePayslipPdf({
+      employeeName: payrollRecord.employee.fullName,
+      employeeEmail: payrollRecord.employee.email || '',
+      payPeriodStart: payrollRecord.payPeriodStart,
+      payPeriodEnd: payrollRecord.payPeriodEnd,
+      baseSalary: payrollRecord.baseSalary,
+      allowances: payrollRecord.allowances,
+      deductions: payrollRecord.deductions,
+      taxAmount: payrollRecord.taxAmount,
+      netSalary: payrollRecord.netSalary,
+      currency: payrollRecord.currency,
+      status: payrollRecord.status,
+      paidAt: payrollRecord.paidAt,
+    });
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="payslip-${id}.pdf"`);
+    res.send(pdf);
+  } catch (error) {
+    console.error('Error generating payslip PDF:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 });

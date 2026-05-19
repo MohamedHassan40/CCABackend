@@ -5,6 +5,8 @@ import cron from 'node-cron';
 import { checkAndRenewSubscriptions } from './subscription-renewal';
 import { checkAndProcessTrials } from './trial-expiry';
 import { checkModuleAccessExpiry } from './module-access-expiry';
+import { checkTicketingSlaAlerts } from './ticketing-sla';
+import { runMembershipMaintenanceJobs } from './membership-expiry';
 import { captureMessage } from '../errorTracking';
 
 let isRunning = false;
@@ -73,6 +75,32 @@ export function startScheduledJobs(): void {
     } catch (error: any) {
       console.error('Error in module access expiry job:', error);
       captureMessage(`Module access expiry job failed: ${error.message}`, 'error');
+    }
+  });
+
+  // Ticketing SLA alerts every hour
+  cron.schedule('0 * * * *', async () => {
+    try {
+      const result = await checkTicketingSlaAlerts();
+      if (result.notified > 0) {
+        console.log(`Ticketing SLA: ${result.processed} checked, ${result.notified} notified`);
+      }
+    } catch (error: any) {
+      console.error('Error in ticketing SLA job:', error);
+      captureMessage(`Ticketing SLA job failed: ${error.message}`, 'error');
+    }
+  });
+
+  // Membership expiry + renewal reminders daily at 4 AM
+  cron.schedule('0 4 * * *', async () => {
+    try {
+      const result = await runMembershipMaintenanceJobs();
+      console.log(
+        `Membership maintenance: ${result.expiredUpdated} expired, ${result.orgsNotified} orgs notified`
+      );
+    } catch (error: any) {
+      console.error('Error in membership maintenance job:', error);
+      captureMessage(`Membership maintenance job failed: ${error.message}`, 'error');
     }
   });
 

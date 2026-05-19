@@ -882,12 +882,13 @@ model CannedReply {
 }
 
 model TicketCategory {
-  id          String  @id @default(cuid())
-  orgId       String
-  name        String
-  description String?
-  color       String? // Hex color for UI
-  isActive    Boolean @default(true)
+  id               String  @id @default(cuid())
+  orgId            String
+  name             String
+  description      String?
+  color            String? // Hex color for UI
+  isActive         Boolean @default(true)
+  showOnPublicForm Boolean @default(true)
 
   organization Organization   @relation(fields: [orgId], references: [id], onDelete: Cascade)
   tickets      Ticket[]

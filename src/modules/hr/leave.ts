@@ -386,9 +386,9 @@ router.put('/requests/:id/approve', requirePermission('hr.leave.approve'), async
       },
     });
 
-    // Update leave balance
+    // Update leave balance (create row if missing, same as submit flow)
     const currentYear = new Date(leaveRequest.startDate).getFullYear();
-    const leaveBalance = await prisma.leaveBalance.findUnique({
+    let leaveBalance = await prisma.leaveBalance.findUnique({
       where: {
         employeeId_leaveTypeId_year: {
           employeeId: leaveRequest.employeeId,
@@ -398,15 +398,26 @@ router.put('/requests/:id/approve', requirePermission('hr.leave.approve'), async
       },
     });
 
-    if (leaveBalance) {
-      await prisma.leaveBalance.update({
-        where: { id: leaveBalance.id },
+    if (!leaveBalance) {
+      leaveBalance = await prisma.leaveBalance.create({
         data: {
-          usedDays: leaveBalance.usedDays + leaveRequest.days,
-          remainingDays: leaveBalance.remainingDays - leaveRequest.days,
+          orgId: req.org.id,
+          employeeId: leaveRequest.employeeId,
+          leaveTypeId: leaveRequest.leaveTypeId,
+          year: currentYear,
+          totalDays: leaveRequest.leaveType.maxDays || 0,
+          remainingDays: leaveRequest.leaveType.maxDays || 0,
         },
       });
     }
+
+    await prisma.leaveBalance.update({
+      where: { id: leaveBalance.id },
+      data: {
+        usedDays: leaveBalance.usedDays + leaveRequest.days,
+        remainingDays: Math.max(0, leaveBalance.remainingDays - leaveRequest.days),
+      },
+    });
 
     if (leaveRequest.employee.userId) {
       createNotification({

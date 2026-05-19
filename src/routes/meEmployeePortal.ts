@@ -375,7 +375,7 @@ router.get('/membership-card', authMiddleware, async (req: Request, res: Respons
       });
     }
 
-    const verifyUrl = `${frontendUrl()}/verify/membership/${qrToken}`;
+    const verifyUrl = `${frontendUrl()}/membership/verify/${qrToken}`;
 
     res.json({
       membership: {

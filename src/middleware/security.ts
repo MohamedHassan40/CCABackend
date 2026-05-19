@@ -42,6 +42,16 @@ export const passwordResetRateLimiter = rateLimit({
   legacyHeaders: false,
 });
 
+/** Public ticket submit / reply (per IP) */
+export const publicTicketRateLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 20,
+  message: 'Too many support requests. Please try again later.',
+  standardHeaders: true,
+  legacyHeaders: false,
+  skip: (req) => process.env.NODE_ENV === 'test',
+});
+
 /** Email one-time code requests (login / verification flows) */
 export const emailOtpRateLimiter = rateLimit({
   windowMs: 60 * 60 * 1000, // 1 hour

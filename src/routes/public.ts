@@ -1,7 +1,11 @@
 import { Router, Request, Response } from 'express';
 import prisma from '../core/db';
+import { publicTicketRateLimiter } from '../middleware/security';
+import { createNotificationForOrgWithPermission } from '../core/notifications/helper';
 
 const router = Router();
+
+const frontendUrl = () => process.env.FRONTEND_URL || process.env.CLIENT_URL || 'http://localhost:3000';
 
 /** Aggregate counts for marketing / landing (no auth). */
 router.get('/platform-stats', async (_req: Request, res: Response) => {
@@ -505,7 +509,7 @@ router.get('/tickets/:orgSlug/categories', async (req: Request, res: Response) =
       return;
     }
     const categories = await prisma.ticketCategory.findMany({
-      where: { orgId: org.id, isActive: true },
+      where: { orgId: org.id, isActive: true, showOnPublicForm: true },
       orderBy: { name: 'asc' },
       select: { id: true, name: true, description: true, color: true },
     });
@@ -517,7 +521,7 @@ router.get('/tickets/:orgSlug/categories', async (req: Request, res: Response) =
 });
 
 // POST /api/public/tickets/:orgSlug - Submit a ticket (public, no auth)
-router.post('/tickets/:orgSlug', async (req: Request, res: Response) => {
+router.post('/tickets/:orgSlug', publicTicketRateLimiter, async (req: Request, res: Response) => {
   try {
     const { orgSlug } = req.params;
     const { title, description, categoryId, submittedByEmail, submittedByName } = req.body;
@@ -550,9 +554,18 @@ router.post('/tickets/:orgSlug', async (req: Request, res: Response) => {
       return;
     }
 
+    const publicCategories = await prisma.ticketCategory.count({
+      where: { orgId: org.id, isActive: true, showOnPublicForm: true },
+    });
+
+    if (publicCategories > 0 && !categoryId) {
+      res.status(400).json({ error: 'Category is required' });
+      return;
+    }
+
     if (categoryId) {
       const category = await prisma.ticketCategory.findFirst({
-        where: { id: categoryId, orgId: org.id, isActive: true },
+        where: { id: categoryId, orgId: org.id, isActive: true, showOnPublicForm: true },
       });
       if (!category) {
         res.status(400).json({ error: 'Invalid category' });
@@ -565,7 +578,6 @@ router.post('/tickets/:orgSlug', async (req: Request, res: Response) => {
         orgId: org.id,
         title,
         description: description || null,
-        // Public submitters cannot set priority; triage by staff inside the org
         priority: 'medium',
         status: 'open',
         createdById: null,
@@ -573,15 +585,46 @@ router.post('/tickets/:orgSlug', async (req: Request, res: Response) => {
         categoryId: categoryId || null,
         submittedByEmail: submittedByEmail.trim(),
         submittedByName: submittedByName ? String(submittedByName).trim() : null,
-      } as any,
+      },
       select: {
         id: true,
         title: true,
         status: true,
         createdAt: true,
         submittedByEmail: true,
-      } as any,
+      },
     });
+
+    const orgRow = await prisma.organization.findUnique({
+      where: { id: org.id },
+      select: { name: true, slug: true },
+    });
+
+    createNotificationForOrgWithPermission(org.id, 'ticketing.tickets.view', {
+      type: 'info',
+      title: 'New public ticket',
+      message: ticket.title,
+      link: `/dashboard/ticketing/tickets/${ticket.id}`,
+    }).catch(() => {});
+
+    try {
+      const { sendEmailQueued, emailTemplates } = await import('../core/email');
+      const trackUrl = `${frontendUrl()}/support/${orgRow?.slug || orgSlug}/track`;
+      const tpl = emailTemplates.ticketSubmitted(
+        orgRow?.name || 'Support',
+        ticket.id,
+        ticket.title,
+        trackUrl
+      );
+      sendEmailQueued({
+        to: submittedByEmail.trim(),
+        subject: tpl.subject,
+        html: tpl.html,
+        priority: 'normal',
+      });
+    } catch {
+      /* email optional */
+    }
 
     res.status(201).json({
       ...ticket,
@@ -740,7 +783,7 @@ router.get('/tickets/:orgSlug/track', async (req: Request, res: Response) => {
 });
 
 // POST /api/public/tickets/:orgSlug/reply - Add public reply to ticket (no auth)
-router.post('/tickets/:orgSlug/reply', async (req: Request, res: Response) => {
+router.post('/tickets/:orgSlug/reply', publicTicketRateLimiter, async (req: Request, res: Response) => {
   try {
     const { orgSlug } = req.params;
     const { ticketId, email, content, name } = req.body;
@@ -766,7 +809,9 @@ router.post('/tickets/:orgSlug/reply', async (req: Request, res: Response) => {
       },
       select: {
         id: true,
+        title: true,
         submittedByEmail: true,
+        assigneeId: true,
         createdBy: { select: { email: true } },
         firstResponseAt: true,
       },
@@ -805,6 +850,51 @@ router.post('/tickets/:orgSlug/reply', async (req: Request, res: Response) => {
       where: { id: ticket.id },
       data: updateData,
     });
+
+    if (ticket.assigneeId) {
+      const { createNotification } = await import('../core/notifications/helper');
+      createNotification({
+        userId: ticket.assigneeId,
+        organizationId: org.id,
+        type: 'info',
+        title: 'New public reply',
+        message: ticket.title,
+        link: `/dashboard/ticketing/tickets/${ticket.id}`,
+      }).catch(() => {});
+    }
+
+    createNotificationForOrgWithPermission(org.id, 'ticketing.tickets.view', {
+      type: 'info',
+      title: 'New public reply',
+      message: ticket.title,
+      link: `/dashboard/ticketing/tickets/${ticket.id}`,
+    }).catch(() => {});
+
+    const customerEmail = ticket.submittedByEmail || ticket.createdBy?.email;
+    if (customerEmail) {
+      try {
+        const orgRow = await prisma.organization.findUnique({
+          where: { id: org.id },
+          select: { name: true, slug: true },
+        });
+        const { sendEmailQueued, emailTemplates } = await import('../core/email');
+        const trackUrl = `${frontendUrl()}/support/${orgRow?.slug || orgSlug}/track`;
+        const tpl = emailTemplates.ticketReplyToCustomer(
+          orgRow?.name || 'Support',
+          ticket.id,
+          ticket.title,
+          trackUrl
+        );
+        sendEmailQueued({
+          to: customerEmail,
+          subject: tpl.subject,
+          html: tpl.html,
+          priority: 'normal',
+        });
+      } catch {
+        /* email optional */
+      }
+    }
 
     res.status(201).json({ message: 'Reply sent successfully' });
   } catch (error) {

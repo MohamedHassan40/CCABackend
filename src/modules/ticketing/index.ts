@@ -978,6 +978,14 @@ router.post('/tickets/:id/merge', requirePermission('ticketing.tickets.edit'), a
       res.status(404).json({ error: 'Target ticket not found' });
       return;
     }
+    if (source.status === 'merged' || source.mergedIntoId) {
+      res.status(400).json({ error: 'Source ticket is already merged' });
+      return;
+    }
+    if (target.status === 'merged' || target.mergedIntoId) {
+      res.status(400).json({ error: 'Cannot merge into a ticket that is already merged' });
+      return;
+    }
     await prisma.ticket.update({
       where: { id },
       data: { status: 'merged', mergedIntoId: targetTicketId },
@@ -1054,7 +1062,10 @@ router.post('/tickets/:id/resume-sla', requirePermission('ticketing.tickets.edit
 });
 
 // GET /api/ticketing/categories - Get ticket categories (optional includeInactive for management)
-router.get('/categories', requirePermission('ticketing.tickets.view'), async (req, res) => {
+router.get(
+  '/categories',
+  requireAnyPermission('ticketing.tickets.view', 'ticketing.tickets.view_own', 'ticketing.tickets.create'),
+  async (req, res) => {
   try {
     if (!req.org) {
       res.status(401).json({ error: 'Unauthorized' });
@@ -1094,7 +1105,7 @@ router.post('/categories', requirePermission('ticketing.tickets.create'), async 
       return;
     }
 
-    const { name, description, color } = req.body;
+    const { name, description, color, showOnPublicForm } = req.body;
 
     if (!name) {
       res.status(400).json({ error: 'Category name is required' });
@@ -1122,6 +1133,7 @@ router.post('/categories', requirePermission('ticketing.tickets.create'), async 
         name,
         description: description || null,
         color: color || null,
+        showOnPublicForm: showOnPublicForm !== false,
       },
     });
 
@@ -1141,7 +1153,7 @@ router.put('/categories/:id', requirePermission('ticketing.tickets.edit'), async
     }
 
     const { id } = req.params;
-    const { name, description, color, isActive } = req.body;
+    const { name, description, color, isActive, showOnPublicForm } = req.body;
 
     const category = await prisma.ticketCategory.findFirst({
       where: {
@@ -1179,6 +1191,7 @@ router.put('/categories/:id', requirePermission('ticketing.tickets.edit'), async
         ...(description !== undefined && { description }),
         ...(color !== undefined && { color }),
         ...(isActive !== undefined && { isActive }),
+        ...(showOnPublicForm !== undefined && { showOnPublicForm: !!showOnPublicForm }),
       },
     });
 

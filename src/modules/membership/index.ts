@@ -12,6 +12,8 @@ import { createNotificationForOrgWithPermission } from '../../core/notifications
 import type { ModuleManifest } from '@cloud-org/shared';
 import { normalizeMemberPhone } from './phone';
 import { parseImportedDate } from './importDates';
+import { addCalendarMonths } from '../../core/dates/membershipEndDate';
+import { isValidEmail } from '../../core/validation/email';
 
 const router = Router();
 
@@ -33,6 +35,24 @@ function formatMembershipNumber(
   const p = (prefix ?? '').trim();
   if (!p) return num;
   return `${p}-${num}`;
+}
+
+async function assertMembershipTypeCapacity(orgId: string, membershipTypeId: string): Promise<void> {
+  const type = await prisma.membershipType.findFirst({
+    where: { id: membershipTypeId, orgId },
+    select: { maxMemberships: true, name: true },
+  });
+  if (!type?.maxMemberships) return;
+  const count = await prisma.memberMembership.count({
+    where: {
+      orgId,
+      membershipTypeId,
+      status: { in: ['active', 'pending'] },
+    },
+  });
+  if (count >= type.maxMemberships) {
+    throw new Error(`Maximum memberships (${type.maxMemberships}) reached for type "${type.name}"`);
+  }
 }
 
 async function allocateMembershipSeq(tx: Prisma.TransactionClient, orgId: string): Promise<number> {
@@ -363,6 +383,24 @@ router.put('/types/:id', requirePermission('membership.types.edit'), async (req:
     if (!type) {
       res.status(404).json({ error: 'Membership type not found' });
       return;
+    }
+
+    if (updateData.description !== undefined && !String(updateData.description).trim()) {
+      res.status(400).json({ error: 'Description is required' });
+      return;
+    }
+    if (updateData.benefits !== undefined) {
+      const benefitArr = Array.isArray(updateData.benefits)
+        ? updateData.benefits
+        : String(updateData.benefits || '')
+            .split('\n')
+            .map((s: string) => s.trim())
+            .filter(Boolean);
+      if (benefitArr.length === 0) {
+        res.status(400).json({ error: 'At least one benefit is required' });
+        return;
+      }
+      updateData.benefits = benefitArr;
     }
 
     if (Object.prototype.hasOwnProperty.call(updateData, 'cardDesignId')) {
@@ -965,6 +1003,12 @@ router.post('/members', requirePermission('membership.members.create'), async (r
       return;
     }
 
+    const emailTrim = String(memberEmail).trim();
+    if (!isValidEmail(emailTrim)) {
+      res.status(400).json({ error: 'Invalid email address' });
+      return;
+    }
+
     const addrTrim = memberAddress != null ? String(memberAddress).trim() : '';
     const cityTrim = memberCity != null ? String(memberCity).trim() : '';
     if (!addrTrim) {
@@ -1007,14 +1051,19 @@ router.post('/members', requirePermission('membership.members.create'), async (r
       return;
     }
 
+    try {
+      await assertMembershipTypeCapacity(req.org.id, membershipTypeId);
+    } catch (capErr: any) {
+      res.status(400).json({ error: capErr.message || 'Membership type capacity reached' });
+      return;
+    }
+
     const start = new Date(startDate);
     if (Number.isNaN(start.getTime())) {
       res.status(400).json({ error: 'Invalid start date' });
       return;
     }
-    const end = endDate
-      ? new Date(endDate)
-      : new Date(start.getTime() + membershipType.durationMonths * 30 * 24 * 60 * 60 * 1000);
+    const end = endDate ? new Date(endDate) : addCalendarMonths(start, membershipType.durationMonths);
 
     const membership = await prisma.$transaction(
       async (tx) => {
@@ -1024,7 +1073,7 @@ router.post('/members', requirePermission('membership.members.create'), async (r
             orgId: req.org!.id,
             membershipTypeId,
             memberName: String(memberName).trim(),
-            memberEmail: String(memberEmail).trim(),
+            memberEmail: emailTrim,
             memberPhone: phoneNorm.e164,
             memberAddress: addrTrim,
             memberCity: cityTrim,
@@ -1101,6 +1150,40 @@ router.put('/members/:id', requirePermission('membership.members.edit'), async (
     if (!membership) {
       res.status(404).json({ error: 'Membership not found' });
       return;
+    }
+
+    if (updateData.memberEmail !== undefined) {
+      const emailTrim = String(updateData.memberEmail).trim();
+      if (!emailTrim || !isValidEmail(emailTrim)) {
+        res.status(400).json({ error: 'Invalid email address' });
+        return;
+      }
+      updateData.memberEmail = emailTrim;
+    }
+
+    if (updateData.memberName !== undefined && !String(updateData.memberName).trim()) {
+      res.status(400).json({ error: 'Member name is required' });
+      return;
+    }
+
+    if (updateData.memberPhone !== undefined || updateData.memberAddress !== undefined) {
+      const phoneVal =
+        updateData.memberPhone !== undefined ? updateData.memberPhone : membership.memberPhone;
+      if (phoneVal == null || String(phoneVal).trim() === '') {
+        res.status(400).json({ error: 'Phone number is required' });
+        return;
+      }
+      const addrVal =
+        updateData.memberAddress !== undefined ? updateData.memberAddress : membership.memberAddress;
+      if (addrVal == null || String(addrVal).trim() === '') {
+        res.status(400).json({ error: 'Address is required' });
+        return;
+      }
+      const cityVal = updateData.memberCity !== undefined ? updateData.memberCity : membership.memberCity;
+      if (cityVal == null || String(cityVal).trim() === '') {
+        res.status(400).json({ error: 'City is required' });
+        return;
+      }
     }
 
     const country =
@@ -1461,7 +1544,22 @@ router.post('/members/bulk', requirePermission('membership.members.create'), asy
             continue;
           }
         }
-        if (!end) end = new Date(start.getTime() + membershipType.durationMonths * 30 * 24 * 60 * 60 * 1000);
+        if (!end) end = addCalendarMonths(start, membershipType.durationMonths);
+
+        try {
+          await assertMembershipTypeCapacity(req.org!.id, membershipType.id);
+        } catch (capErr: any) {
+          results.failed++;
+          results.errors.push({ row: i + 1, error: capErr.message || 'Capacity reached' });
+          continue;
+        }
+
+        const bulkEmail = String(m.memberEmail).trim();
+        if (!isValidEmail(bulkEmail)) {
+          results.failed++;
+          results.errors.push({ row: i + 1, error: 'Invalid email address' });
+          continue;
+        }
 
         await prisma.$transaction(
           async (tx) => {

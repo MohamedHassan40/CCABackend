@@ -307,6 +307,57 @@ export const emailTemplates = {
     }),
   }),
 
+  ticketSubmitted: (
+    orgName: string,
+    ticketId: string,
+    title: string,
+    trackUrl: string
+  ) => ({
+    subject: `Support ticket received — ${orgName}`,
+    html: ccaEmailShell({
+      previewText: `We received your request: ${title}`,
+      title: 'Ticket received',
+      innerHtml: `
+        ${p(`Thank you for contacting <strong>${escapeHtml(orgName)}</strong>.`)}
+        ${p(`<strong>Ticket ID:</strong> ${escapeHtml(ticketId)}`)}
+        ${p(`<strong>Subject:</strong> ${escapeHtml(title)}`)}
+        ${p('Use your email and ticket ID to track replies.')}
+        ${ccaButton(trackUrl, 'Track your ticket')}
+      `,
+    }),
+  }),
+
+  ticketReplyToCustomer: (
+    orgName: string,
+    ticketId: string,
+    title: string,
+    trackUrl: string
+  ) => ({
+    subject: `New reply on your ticket — ${orgName}`,
+    html: ccaEmailShell({
+      previewText: `There is a new reply on: ${title}`,
+      title: 'New reply',
+      innerHtml: `
+        ${p(`Your ticket <strong>${escapeHtml(ticketId)}</strong> has a new reply.`)}
+        ${p(`<strong>Subject:</strong> ${escapeHtml(title)}`)}
+        ${ccaButton(trackUrl, 'View conversation')}
+      `,
+    }),
+  }),
+
+  ticketAssignedToAgent: (ticketId: string, title: string, dashboardUrl: string) => ({
+    subject: `Ticket assigned: ${title}`,
+    html: ccaEmailShell({
+      previewText: `You were assigned ticket ${ticketId}`,
+      title: 'New assignment',
+      innerHtml: `
+        ${p(`You have been assigned ticket <strong>${escapeHtml(ticketId)}</strong>.`)}
+        ${p(`<strong>Subject:</strong> ${escapeHtml(title)}`)}
+        ${ccaButton(dashboardUrl, 'Open ticket')}
+      `,
+    }),
+  }),
+
   membershipAnnouncement: (orgName: string, title: string, content: string, optionalUrl?: string) => {
     const ti = escapeHtml(title);
     const bodyHtml = escapeHtml(content).replace(/\r\n/g, '\n').replace(/\n/g, '<br />');
