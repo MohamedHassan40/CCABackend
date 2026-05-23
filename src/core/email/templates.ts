@@ -358,6 +358,90 @@ export const emailTemplates = {
     }),
   }),
 
+  membershipRegistered: (
+    memberName: string,
+    orgName: string,
+    membershipTypeName: string,
+    membershipNumber: string,
+    trackUrl: string,
+    portalUrl: string,
+    requiresPayment: boolean
+  ) => {
+    const inner = `
+      ${p(`Hello ${escapeHtml(memberName)},`)}
+      ${p(`Your membership with <strong>${escapeHtml(orgName)}</strong> has been registered.`)}
+      ${p(`<strong>Plan:</strong> ${escapeHtml(membershipTypeName)}`)}
+      ${p(`<strong>Reference:</strong> ${escapeHtml(membershipNumber)}`)}
+      ${requiresPayment
+        ? p('Payment is still required to activate your membership. Use the link below to complete checkout.')
+        : p('Your membership is active. Sign in to view your digital card and announcements.')}
+      ${ccaButton(requiresPayment ? trackUrl : portalUrl, requiresPayment ? 'Complete payment' : 'Open member portal')}
+      ${ccaMutedBox(`Track status anytime: <a href="${escapeHtml(trackUrl)}" style="color:${T.primary};">${escapeHtml(trackUrl)}</a>`)}
+    `;
+    return {
+      subject: requiresPayment
+        ? `Complete your membership — ${orgName}`
+        : `Welcome — ${orgName} membership`,
+      html: ccaEmailShell({
+        previewText: `Membership reference ${membershipNumber}`,
+        title: requiresPayment ? 'Almost there' : 'Welcome',
+        innerHtml: inner,
+      }),
+    };
+  },
+
+  membershipPaymentConfirmed: (
+    memberName: string,
+    orgName: string,
+    membershipTypeName: string,
+    validUntil: string,
+    portalUrl: string
+  ) => ({
+    subject: `Payment received — ${orgName}`,
+    html: ccaEmailShell({
+      previewText: 'Your membership is now active',
+      title: 'Payment confirmed',
+      innerHtml: `
+        ${p(`Hello ${escapeHtml(memberName)},`)}
+        ${p(`Thank you! Your payment for <strong>${escapeHtml(membershipTypeName)}</strong> at ${escapeHtml(orgName)} was successful.`)}
+        ${p(`Your membership is active until <strong>${escapeHtml(validUntil)}</strong>.`)}
+        ${ccaButton(portalUrl, 'View my membership card')}
+      `,
+    }),
+  }),
+
+  membershipExpiringSoon: (
+    memberName: string,
+    orgName: string,
+    daysRemaining: number,
+    endDate: string,
+    renewUrl: string
+  ) => ({
+    subject: `Your ${orgName} membership expires in ${daysRemaining} days`,
+    html: ccaEmailShell({
+      previewText: `Renew before ${endDate}`,
+      title: 'Renewal reminder',
+      innerHtml: `
+        ${p(`Hello ${escapeHtml(memberName)},`)}
+        ${p(`Your membership with <strong>${escapeHtml(orgName)}</strong> expires on <strong>${escapeHtml(endDate)}</strong> (${daysRemaining} day(s) left).`)}
+        ${ccaButton(renewUrl, 'Renew membership')}
+      `,
+    }),
+  }),
+
+  membershipExpired: (memberName: string, orgName: string, renewUrl: string) => ({
+    subject: `Your ${orgName} membership has expired`,
+    html: ccaEmailShell({
+      previewText: 'Renew to restore access',
+      title: 'Membership expired',
+      innerHtml: `
+        ${p(`Hello ${escapeHtml(memberName)},`)}
+        ${p(`Your membership with <strong>${escapeHtml(orgName)}</strong> has expired.`)}
+        ${ccaButton(renewUrl, 'Renew now')}
+      `,
+    }),
+  }),
+
   membershipAnnouncement: (orgName: string, title: string, content: string, optionalUrl?: string) => {
     const ti = escapeHtml(title);
     const bodyHtml = escapeHtml(content).replace(/\r\n/g, '\n').replace(/\n/g, '<br />');

@@ -62,6 +62,7 @@ model User {
   activityAssignedTo     SalesActivity[]        @relation("ActivityAssignedTo")
   activityCreatedBy      SalesActivity[]        @relation("ActivityCreatedBy")
   membershipCreatedBy    MemberMembership[]     @relation("MembershipCreatedBy")
+  memberMemberships      MemberMembership[]     @relation("MemberMembershipUser")
   announcementCreatedBy  Announcement[]         @relation("AnnouncementCreatedBy")
   conversationAssignedTo Conversation[]         @relation("ConversationAssignedTo")
   absenceDeductionDecisions AbsenceDeductionDecision[] @relation("DeductionDecisionCreatedBy")
@@ -2121,6 +2122,7 @@ model MemberMembership {
   paymentMethod    String? // "cash", "card", "bank_transfer", etc.
   notes            String?
   createdById      String // User who created this membership
+  userId           String? // Linked login account for member portal
   qrToken          String?   @unique // Unique token for QR code verification URL
   cardDesignId     String? // Optional: which card design template to use for this member
   /// Org-scoped sequential number; formatted with Organization.membershipNumberPrefix on cards
@@ -2130,6 +2132,7 @@ model MemberMembership {
   membershipType MembershipType       @relation(fields: [membershipTypeId], references: [id], onDelete: Cascade)
   cardDesign     MembershipCardDesign? @relation(fields: [cardDesignId], references: [id], onDelete: SetNull)
   createdBy      User                 @relation("MembershipCreatedBy", fields: [createdById], references: [id], onDelete: Cascade)
+  user           User?                @relation("MemberMembershipUser", fields: [userId], references: [id], onDelete: SetNull)
   conversations  Conversation[]       @relation("MemberConversations")
 
   createdAt DateTime @default(now())
@@ -2141,6 +2144,7 @@ model MemberMembership {
   @@index([memberEmail])
   @@index([endDate])
   @@index([qrToken])
+  @@index([userId])
   @@index([orgId, membershipSeq])
 }
 

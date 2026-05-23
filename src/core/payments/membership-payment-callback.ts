@@ -1,6 +1,8 @@
 import type { Request, Response } from 'express';
 import type { MoyasarInvoice } from './moyasar';
 import prisma from '../db';
+import { addCalendarMonths } from '../dates/membershipEndDate';
+import { sendMembershipPaymentConfirmedEmail } from '../membership/memberEmails';
 
 function mergeMetadata(body: Record<string, unknown>, invoice: MoyasarInvoice): Record<string, unknown> {
   const fromInvoice =
@@ -34,18 +36,49 @@ export async function activateMembershipFromPaidMoyasarInvoice(
 
   const membership = await prisma.memberMembership.findUnique({
     where: { id: memberMembershipId },
-    include: { membershipType: true },
+    include: { membershipType: true, organization: { select: { name: true, slug: true } } },
   });
 
   if (!membership) {
     return { ok: false, error: 'Membership record not found' };
   }
 
+  const action = metadata.action as string | undefined;
+  const now = new Date();
+  const paidNote = `[Paid via Moyasar invoice ${invoice.id}]`;
+
+  if (action === 'renew') {
+    const base = membership.endDate > now ? membership.endDate : now;
+    const newEnd = addCalendarMonths(base, membership.membershipType.durationMonths);
+    await prisma.memberMembership.update({
+      where: { id: membership.id },
+      data: {
+        status: 'active',
+        paymentStatus: 'paid',
+        endDate: newEnd,
+        renewedAt: now,
+        paymentAmount: invoice.amount ?? membership.membershipType.priceCents,
+        paymentMethod: 'card',
+        notes: membership.notes ? `${membership.notes}\n${paidNote}` : paidNote,
+      },
+    });
+    if (membership.organization.slug) {
+      void sendMembershipPaymentConfirmedEmail({
+        to: membership.memberEmail,
+        memberName: membership.memberName,
+        orgName: membership.organization.name,
+        orgSlug: membership.organization.slug,
+        membershipTypeName: membership.membershipType.name,
+        endDate: newEnd,
+      });
+    }
+    return { ok: true, membershipId: membership.id };
+  }
+
   if (membership.paymentStatus === 'paid' && membership.status === 'active') {
     return { ok: true, membershipId: membership.id };
   }
 
-  const now = new Date();
   await prisma.memberMembership.update({
     where: { id: membership.id },
     data: {
@@ -53,13 +86,42 @@ export async function activateMembershipFromPaidMoyasarInvoice(
       paymentStatus: 'paid',
       paymentAmount: invoice.amount ?? membership.membershipType.priceCents,
       paymentMethod: 'card',
-      notes: membership.notes
-        ? `${membership.notes}\n[Paid via Moyasar invoice ${invoice.id}]`
-        : `[Paid via Moyasar invoice ${invoice.id}]`,
+      notes: membership.notes ? `${membership.notes}\n${paidNote}` : paidNote,
     },
   });
 
+  if (membership.organization.slug) {
+    void sendMembershipPaymentConfirmedEmail({
+      to: membership.memberEmail,
+      memberName: membership.memberName,
+      orgName: membership.organization.name,
+      orgSlug: membership.organization.slug,
+      membershipTypeName: membership.membershipType.name,
+      endDate: membership.endDate,
+    });
+  }
+
   return { ok: true, membershipId: membership.id };
+}
+
+export async function markMembershipPaymentFailed(
+  memberMembershipId: string,
+  invoiceId: string
+): Promise<void> {
+  const membership = await prisma.memberMembership.findUnique({
+    where: { id: memberMembershipId },
+    select: { id: true, paymentStatus: true, notes: true },
+  });
+  if (!membership || membership.paymentStatus === 'paid') return;
+  const marker = `[Payment failed: ${invoiceId}]`;
+  if ((membership.notes ?? '').includes(marker)) return;
+  await prisma.memberMembership.update({
+    where: { id: membership.id },
+    data: {
+      paymentStatus: 'failed',
+      notes: membership.notes ? `${membership.notes}\n${marker}` : marker,
+    },
+  });
 }
 
 export async function handleMembershipPaymentCallback(req: Request, res: Response): Promise<void> {
@@ -103,6 +165,14 @@ export async function handleMembershipPaymentCallback(req: Request, res: Respons
     }
 
     if (invoice.status !== 'paid') {
+      const metadata = mergeMetadata(body, invoice);
+      if (
+        metadata.type === 'member_membership' &&
+        typeof metadata.memberMembershipId === 'string' &&
+        (invoice.status === 'failed' || invoice.status === 'expired')
+      ) {
+        await markMembershipPaymentFailed(metadata.memberMembershipId, invoice.id);
+      }
       res.json({ received: true, message: 'Payment not completed yet' });
       return;
     }

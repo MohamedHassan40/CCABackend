@@ -7,6 +7,11 @@ import { addCalendarMonths } from '../core/dates/membershipEndDate';
 import { isValidEmail } from '../core/validation/email';
 import { normalizeMemberPhone } from '../modules/membership/phone';
 import { getInvoiceCheckoutUrl, moyasarService } from '../core/payments/moyasar';
+import {
+  linkMemberRecordToUser,
+  provisionMemberLoginAccount,
+} from '../core/membership/memberAccounts';
+import { sendMembershipRegisteredEmail } from '../core/membership/memberEmails';
 
 const router = Router();
 
@@ -180,6 +185,8 @@ router.post('/:orgSlug/register', publicTicketRateLimiter, async (req: Request, 
       memberAddress,
       memberCity,
       memberCountry,
+      password,
+      createAccount,
     } = req.body;
 
     if (!membershipTypeId || !String(memberName || '').trim() || !String(memberEmail || '').trim()) {
@@ -266,6 +273,31 @@ router.post('/:orgSlug/register', publicTicketRateLimiter, async (req: Request, 
       membership.membershipSeq
     );
 
+    const wantsAccount =
+      createAccount !== false && typeof password === 'string' && password.length >= 8;
+    if (wantsAccount) {
+      const account = await provisionMemberLoginAccount({
+        orgId: org.id,
+        email: emailTrim,
+        name: String(memberName).trim(),
+        password: String(password),
+      });
+      if (account) {
+        await linkMemberRecordToUser(membership.id, account.userId);
+      }
+    }
+
+    void sendMembershipRegisteredEmail({
+      to: emailTrim,
+      memberName: membership.memberName,
+      orgName: org.name,
+      orgSlug: org.slug!,
+      membershipTypeName: membership.membershipType.name,
+      membershipNumber: membershipNumber ?? membership.id,
+      membershipId: membership.id,
+      requiresPayment: isPaid,
+    });
+
     res.status(201).json({
       id: membership.id,
       membershipNumber: membershipNumber ?? membership.id,
@@ -277,6 +309,7 @@ router.post('/:orgSlug/register', publicTicketRateLimiter, async (req: Request, 
       priceCents: membership.membershipType.priceCents,
       currency: membership.membershipType.currency,
       requiresPayment: isPaid,
+      accountCreated: wantsAccount,
       message: isPaid
         ? 'Registration received. Complete payment to activate your membership.'
         : 'Your membership is active.',
@@ -324,7 +357,13 @@ router.post('/:orgSlug/payment', publicTicketRateLimiter, async (req: Request, r
       return;
     }
 
-    if (membership.paymentStatus === 'paid' && membership.status === 'active') {
+    const paymentAction = req.body.action === 'renew' ? 'renew' : 'activate';
+
+    if (
+      paymentAction === 'activate' &&
+      membership.paymentStatus === 'paid' &&
+      membership.status === 'active'
+    ) {
       res.status(400).json({ error: 'This membership is already paid and active' });
       return;
     }
@@ -352,9 +391,13 @@ router.post('/:orgSlug/payment', publicTicketRateLimiter, async (req: Request, r
         memberMembershipId: membership.id,
         organizationId: org.id,
         organizationSlug: slug,
+        action: paymentAction,
       },
-      success_url: `${fe}/membership/${slug}/track?${trackQs.toString()}&payment=success`,
-      back_url: `${fe}/membership/${slug}/pay?membershipId=${membership.id}&email=${encodeURIComponent(membership.memberEmail)}`,
+      success_url:
+        paymentAction === 'renew'
+          ? `${fe}/membership/${slug}/account?renewed=1`
+          : `${fe}/membership/${slug}/track?${trackQs.toString()}&payment=success`,
+      back_url: `${fe}/membership/${slug}/pay?membershipId=${membership.id}&email=${encodeURIComponent(membership.memberEmail)}&action=${paymentAction}&payment=failed`,
       callback_url: `${api}/api/public/membership/payment-callback`,
       expired_at: new Date(Date.now() + 48 * 60 * 60 * 1000).toISOString(),
     });
@@ -365,11 +408,19 @@ router.post('/:orgSlug/payment', publicTicketRateLimiter, async (req: Request, r
       return;
     }
 
+    if (paymentAction === 'activate' || paymentAction === 'renew') {
+      await prisma.memberMembership.update({
+        where: { id: membership.id },
+        data: { paymentStatus: 'pending' },
+      });
+    }
+
     res.json({
       invoiceUrl: checkoutUrl,
       invoiceId: invoice.id,
       amountCents: amount,
       currency: membership.membershipType.currency,
+      action: paymentAction,
     });
   } catch (error) {
     console.error('POST public membership payment:', error);
@@ -423,6 +474,10 @@ router.get('/:orgSlug/track', async (req: Request, res: Response) => {
     const now = new Date();
     const isActive = membership.status === 'active' && membership.endDate >= now;
 
+    const canRenew =
+      membership.status === 'expired' ||
+      (membership.status === 'active' && membership.endDate <= new Date(Date.now() + 30 * 24 * 60 * 60 * 1000));
+
     res.json({
       id: membership.id,
       membershipNumber: membershipNumber ?? membership.id,
@@ -430,17 +485,122 @@ router.get('/:orgSlug/track', async (req: Request, res: Response) => {
       memberEmail: membership.memberEmail,
       status: membership.status,
       paymentStatus: membership.paymentStatus,
+      paymentFailed: membership.paymentStatus === 'failed',
       startDate: membership.startDate,
       endDate: membership.endDate,
       isActive,
       membershipType: membership.membershipType,
       requiresPayment:
         membership.paymentStatus === 'pending' && membership.membershipType.priceCents > 0,
+      canRenew,
       priceCents: membership.membershipType.priceCents,
       currency: membership.membershipType.currency,
     });
   } catch (error) {
     console.error('GET public membership track:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// POST /api/public/membership/:orgSlug/setup-account — link existing membership to login
+router.post('/:orgSlug/setup-account', publicTicketRateLimiter, async (req: Request, res: Response) => {
+  try {
+    const org = await resolveOrgAndModule(req.params.orgSlug);
+    if (!org) {
+      res.status(404).json({ error: 'Membership portal not found' });
+      return;
+    }
+
+    const { membershipId, email, password } = req.body;
+    if (!membershipId || !email || !password || String(password).length < 8) {
+      res.status(400).json({ error: 'membershipId, email, and password (min 8 chars) are required' });
+      return;
+    }
+
+    const membership = await prisma.memberMembership.findFirst({
+      where: { id: String(membershipId), orgId: org.id },
+    });
+    if (!membership) {
+      res.status(404).json({ error: 'Membership not found' });
+      return;
+    }
+    if (membership.memberEmail.toLowerCase() !== String(email).trim().toLowerCase()) {
+      res.status(403).json({ error: 'Email does not match this membership' });
+      return;
+    }
+
+    const account = await provisionMemberLoginAccount({
+      orgId: org.id,
+      email: membership.memberEmail,
+      name: membership.memberName,
+      password: String(password),
+    });
+    if (!account) {
+      res.status(400).json({ error: 'Could not create account' });
+      return;
+    }
+    await linkMemberRecordToUser(membership.id, account.userId);
+
+    res.json({
+      message: 'Account ready. Sign in to access your member portal.',
+      portalUrl: `${frontendUrl()}/membership/${org.slug}/account`,
+    });
+  } catch (error) {
+    console.error('POST public membership setup-account:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// GET /api/public/membership/:orgSlug/lookup?q= — front-desk search by ref or email
+router.get('/:orgSlug/lookup', async (req: Request, res: Response) => {
+  try {
+    const org = await resolveOrgAndModule(req.params.orgSlug);
+    if (!org) {
+      res.status(404).json({ error: 'Membership portal not found' });
+      return;
+    }
+
+    const q = String(req.query.q || '').trim();
+    if (!q || q.length < 2) {
+      res.status(400).json({ error: 'Search query must be at least 2 characters' });
+      return;
+    }
+
+    const seq = parseInt(q.replace(/[^\d]/g, ''), 10);
+    const orClauses: Prisma.MemberMembershipWhereInput[] = [
+      { memberEmail: { contains: q, mode: 'insensitive' } },
+      { memberName: { contains: q, mode: 'insensitive' } },
+    ];
+    if (Number.isFinite(seq) && seq > 0) orClauses.push({ membershipSeq: seq });
+    if (q.length >= 12) orClauses.push({ id: q });
+
+    const rows = await prisma.memberMembership.findMany({
+      where: { orgId: org.id, OR: orClauses },
+      take: 15,
+      orderBy: { endDate: 'desc' },
+      include: { membershipType: { select: { name: true } } },
+    });
+
+    const now = new Date();
+    res.json(
+      rows.map((m) => ({
+        id: m.id,
+        membershipNumber:
+          formatMembershipNumber(
+            org.membershipNumberPrefix,
+            org.membershipNumberPadLength,
+            m.membershipSeq
+          ) ?? m.id,
+        memberName: m.memberName,
+        memberEmail: m.memberEmail,
+        status: m.status,
+        membershipTypeName: m.membershipType.name,
+        endDate: m.endDate,
+        isActive: m.status === 'active' && m.endDate >= now,
+      }))
+    );
+  } catch (error) {
+    console.error('GET public membership lookup:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 });

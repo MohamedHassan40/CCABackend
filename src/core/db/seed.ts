@@ -324,6 +324,19 @@ async function main() {
     },
   });
 
+  await prisma.role.upsert({
+    where: { key: 'membership.member' },
+    update: {
+      name: 'Membership Member',
+      description: 'Member portal: view card, announcements, and renew membership',
+    },
+    create: {
+      key: 'membership.member',
+      name: 'Membership Member',
+      description: 'Member portal: view card, announcements, and renew membership',
+    },
+  });
+
   console.log('✅ Created roles\n');
 
   // ============================================

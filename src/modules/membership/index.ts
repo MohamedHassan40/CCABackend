@@ -95,15 +95,21 @@ async function notifyMembersOfPublishedAnnouncement(
       select: { name: true, slug: true },
     });
     const base = frontendUrl().replace(/\/$/, '');
-    const optionalUrl = org?.slug ? `${base}/org/${org.slug}` : base;
+    const optionalUrl = org?.slug ? `${base}/membership/${org.slug}/account` : base;
+
+    const now = new Date();
+    const in30 = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
 
     const where: any = {
       orgId,
       status: 'active',
-      endDate: { gt: new Date() },
+      endDate: { gt: now },
     };
     if (ann.targetAudience === 'specific_type' && ann.specificMembershipTypeId) {
       where.membershipTypeId = ann.specificMembershipTypeId;
+    }
+    if (ann.targetAudience === 'expiring_soon') {
+      where.endDate = { gt: now, lte: in30 };
     }
 
     const rows = await prisma.memberMembership.findMany({
@@ -153,6 +159,11 @@ export const membershipManifest: ModuleManifest = {
     {
       path: '/membership/members',
       label: 'Members',
+      permission: 'membership.members.view',
+    },
+    {
+      path: '/membership/analytics',
+      label: 'Analytics',
       permission: 'membership.members.view',
     },
     {
@@ -1663,6 +1674,105 @@ router.post('/jobs/renewal-reminders', requirePermission('membership.members.vie
   }
 });
 
+// GET /api/membership/analytics — revenue by type, churn, renewals over time
+router.get('/analytics', requirePermission('membership.members.view'), async (req: Request, res: Response) => {
+  try {
+    if (!req.org) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+
+    const orgId = req.org.id;
+    const now = new Date();
+    const monthsBack = 12;
+    const start = new Date(now.getFullYear(), now.getMonth() - (monthsBack - 1), 1);
+
+    const members = await prisma.memberMembership.findMany({
+      where: { orgId },
+      select: {
+        id: true,
+        status: true,
+        paymentStatus: true,
+        paymentAmount: true,
+        membershipTypeId: true,
+        membershipType: { select: { id: true, name: true, priceCents: true, currency: true } },
+        startDate: true,
+        endDate: true,
+        renewedAt: true,
+        createdAt: true,
+      },
+    });
+
+    const revenueByType = new Map<
+      string,
+      { typeId: string; typeName: string; currency: string; revenueCents: number; activeCount: number }
+    >();
+
+    for (const m of members) {
+      const key = m.membershipTypeId;
+      const row = revenueByType.get(key) ?? {
+        typeId: key,
+        typeName: m.membershipType.name,
+        currency: m.membershipType.currency || 'SAR',
+        revenueCents: 0,
+        activeCount: 0,
+      };
+      if (m.paymentStatus === 'paid' && m.paymentAmount) {
+        row.revenueCents += m.paymentAmount;
+      }
+      if (m.status === 'active' && m.endDate >= now) row.activeCount++;
+      revenueByType.set(key, row);
+    }
+
+    const totalActive = members.filter((m) => m.status === 'active' && m.endDate >= now).length;
+    const totalExpired = members.filter((m) => m.status === 'expired').length;
+    const totalCancelled = members.filter((m) => m.status === 'cancelled').length;
+    const churnRate =
+      totalActive + totalExpired > 0 ? totalExpired / (totalActive + totalExpired) : 0;
+
+    const renewalsByMonth: { month: string; count: number }[] = [];
+    for (let i = monthsBack - 1; i >= 0; i--) {
+      const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+      const label = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+      const next = new Date(d.getFullYear(), d.getMonth() + 1, 1);
+      const count = members.filter(
+        (m) => m.renewedAt && m.renewedAt >= d && m.renewedAt < next
+      ).length;
+      renewalsByMonth.push({ month: label, count });
+    }
+
+    const signupsByMonth: { month: string; count: number }[] = [];
+    for (let i = monthsBack - 1; i >= 0; i--) {
+      const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+      const label = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+      const next = new Date(d.getFullYear(), d.getMonth() + 1, 1);
+      const count = members.filter((m) => m.createdAt >= d && m.createdAt < next).length;
+      signupsByMonth.push({ month: label, count });
+    }
+
+    res.json({
+      summary: {
+        totalMembers: members.length,
+        active: totalActive,
+        expired: totalExpired,
+        cancelled: totalCancelled,
+        churnRate: Math.round(churnRate * 1000) / 1000,
+        totalRevenueCents: members
+          .filter((m) => m.paymentStatus === 'paid' && m.paymentAmount)
+          .reduce((s, m) => s + (m.paymentAmount ?? 0), 0),
+      },
+      revenueByType: Array.from(revenueByType.values()).sort((a, b) => b.revenueCents - a.revenueCents),
+      renewalsByMonth,
+      signupsByMonth,
+      periodStart: start,
+    });
+  } catch (error: unknown) {
+    console.error('Error fetching membership analytics:', error);
+    const msg = error instanceof Error ? error.message : 'Internal server error';
+    res.status(500).json({ error: msg });
+  }
+});
+
 // ============================================
 // ANNOUNCEMENTS
 // ============================================
@@ -1698,10 +1808,17 @@ router.get('/announcements', requirePermission('membership.announcements.view'),
       });
 
       if (membership) {
-        where.OR = [
+        const days = Math.ceil(
+          (membership.endDate.getTime() - Date.now()) / (24 * 60 * 60 * 1000)
+        );
+        const or: any[] = [
           { targetAudience: 'all' },
           { specificMembershipTypeId: membership.membershipTypeId },
         ];
+        if (membership.status === 'active' && days > 0 && days <= 30) {
+          or.push({ targetAudience: 'expiring_soon' });
+        }
+        where.OR = or;
       } else {
         where.targetAudience = 'all';
       }
