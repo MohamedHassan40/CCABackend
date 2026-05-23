@@ -406,7 +406,7 @@ router.post('/:id/reject', authMiddleware, requireSuperAdmin, async (req: Reques
 router.put('/:id', authMiddleware, async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
-    const { name, industry, companySize } = req.body;
+    const { name, industry, companySize, emailBranding } = req.body;
 
     if (!req.org || req.org.id !== id) {
       res.status(403).json({ error: 'Unauthorized' });
@@ -444,12 +444,28 @@ router.put('/:id', authMiddleware, async (req: Request, res: Response) => {
       return;
     }
 
+  if (emailBranding !== undefined) {
+      if (emailBranding !== null && (typeof emailBranding !== 'object' || Array.isArray(emailBranding))) {
+        res.status(400).json({ error: 'emailBranding must be an object or null' });
+        return;
+      }
+    }
+
     const updated = await prisma.organization.update({
       where: { id },
       data: {
         ...(name && { name }),
         ...(industry !== undefined && { industry }),
         ...(companySize !== undefined && { companySize }),
+        ...(emailBranding !== undefined && { emailBranding }),
+      },
+      select: {
+        id: true,
+        name: true,
+        slug: true,
+        industry: true,
+        companySize: true,
+        emailBranding: true,
       },
     });
 

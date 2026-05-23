@@ -71,6 +71,20 @@ export async function getOrgUserIdsWithPermission(
   return [...new Set(memberships.map((m) => m.membership.userId))];
 }
 
+/** Emails of org users who have a given permission. */
+export async function getOrgUserEmailsWithPermission(
+  organizationId: string,
+  permissionKey: string
+): Promise<string[]> {
+  const userIds = await getOrgUserIdsWithPermission(organizationId, permissionKey);
+  if (userIds.length === 0) return [];
+  const users = await prisma.user.findMany({
+    where: { id: { in: userIds }, isActive: true },
+    select: { email: true },
+  });
+  return users.map((u) => u.email).filter(Boolean);
+}
+
 /** Notify all org users who have the given permission. */
 export async function createNotificationForOrgWithPermission(
   organizationId: string,

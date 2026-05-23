@@ -361,6 +361,8 @@ router.get('/activities', authMiddleware, async (req: Request, res: Response) =>
             submittedByEmail: { equals: email, mode: 'insensitive' as const },
           })),
         ];
+      } else if (permKeys.has('ticketing.tickets.view') || permKeys.has('ticketing.tickets.edit')) {
+        ticketWhere.OR = [{ assigneeId: userId }, { assigneeId: null }];
       } else {
         ticketWhere.assigneeId = userId;
       }
@@ -377,18 +379,21 @@ router.get('/activities', authMiddleware, async (req: Request, res: Response) =>
               status: true,
               priority: true,
               updatedAt: true,
+              assigneeId: true,
               category: { select: { name: true } },
             },
           })
           .then((rows) => {
             for (const r of rows) {
-              const isAssigned = true;
+              const isUnassigned = r.assigneeId == null;
               pushActivity(items, {
                 id: `ticket-${r.id}`,
                 type: 'ticket',
-                category: isAssigned ? 'action_required' : 'in_progress',
+                category: isUnassigned ? 'action_required' : 'in_progress',
                 title: r.title,
-                subtitle: r.category?.name ?? 'Support ticket',
+                subtitle: isUnassigned
+                  ? 'Unassigned ticket — claim or assign'
+                  : (r.category?.name ?? 'Support ticket'),
                 status: r.status,
                 priority: r.priority,
                 href: '/dashboard/ticketing/tickets',

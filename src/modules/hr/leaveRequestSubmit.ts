@@ -143,6 +143,24 @@ export async function submitLeaveRequestForEmployee(params: {
       message: `${leaveRequest.employee.fullName} requested ${days} day(s) of ${leaveRequest.leaveType.name}`,
       link: `/dashboard/hr/leave`,
     }).catch(() => {});
+
+    const { getOrgUserEmailsWithPermission } = await import('../../core/notifications/helper');
+    const { sendEmailQueued } = await import('../../core/email');
+    const { leaveSubmittedToApproversEmail } = await import('../../core/email/operationalEmails');
+    const { getOrgEmailBrand } = await import('../../core/auth/magicLink');
+    const fe = (process.env.FRONTEND_URL || process.env.CLIENT_URL || 'http://localhost:3000').replace(/\/$/, '');
+    const brand = await getOrgEmailBrand(orgId, 'hr');
+    const approverEmails = await getOrgUserEmailsWithPermission(orgId, 'hr.leave.approve');
+    const tpl = leaveSubmittedToApproversEmail({
+      employeeName: leaveRequest.employee.fullName,
+      days,
+      leaveTypeName: leaveRequest.leaveType.name,
+      reviewUrl: `${fe}/dashboard/hr/leave`,
+      brand,
+    });
+    for (const to of approverEmails) {
+      sendEmailQueued({ to, subject: tpl.subject, html: tpl.html, priority: 'normal' }).catch(() => {});
+    }
   }
 
   return { ok: true, leaveRequest };

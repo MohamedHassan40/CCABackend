@@ -605,4 +605,57 @@ router.get('/:orgSlug/lookup', async (req: Request, res: Response) => {
   }
 });
 
+// POST /api/public/membership/:orgSlug/magic-link — send passwordless sign-in link
+router.post('/:orgSlug/magic-link', publicTicketRateLimiter, async (req: Request, res: Response) => {
+  try {
+    const org = await resolveOrgAndModule(req.params.orgSlug);
+    if (!org) {
+      res.status(404).json({ error: 'Membership portal not found' });
+      return;
+    }
+    const email = String(req.body.email || '').trim();
+    if (!email) {
+      res.status(400).json({ error: 'email is required' });
+      return;
+    }
+    const member = await prisma.memberMembership.findFirst({
+      where: { orgId: org.id, memberEmail: { equals: email, mode: 'insensitive' } },
+      select: { memberName: true, userId: true },
+    });
+    const generic = { message: 'If a membership exists for this email, a sign-in link has been sent.' };
+    if (!member) {
+      res.json(generic);
+      return;
+    }
+    let user = member.userId
+      ? await prisma.user.findUnique({ where: { id: member.userId } })
+      : await prisma.user.findUnique({ where: { email: email.toLowerCase() } });
+    if (!user) {
+      res.json(generic);
+      return;
+    }
+    const { ensureOrgMemberRole } = await import('../core/membership/memberAccounts');
+    await ensureOrgMemberRole(user.id, org.id);
+    const { createMagicLoginToken, magicLinkUrl, getOrgEmailBrand } = await import('../core/auth/magicLink');
+    const token = await createMagicLoginToken({
+      userId: user.id,
+      orgId: org.id,
+      redirectPath: `/membership/${org.slug}/account`,
+    });
+    const brand = await getOrgEmailBrand(org.id, 'membership');
+    const { sendEmailQueued, emailTemplates } = await import('../core/email');
+    const tpl = emailTemplates.magicLinkLogin(
+      member.memberName || email,
+      magicLinkUrl(token),
+      15,
+      brand
+    );
+    await sendEmailQueued({ to: email, subject: tpl.subject, html: tpl.html, priority: 'high' });
+    res.json(generic);
+  } catch (error) {
+    console.error('POST public membership magic-link:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 export default router;

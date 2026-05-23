@@ -10,6 +10,7 @@ import superAdminRoutes from './routes/super-admin';
 import organizationRoutes from './routes/organizations';
 import publicRoutes from './routes/public';
 import publicMembershipRoutes from './routes/publicMembership';
+import publicPmoRoutes from './routes/publicPmo';
 import userRoutes from './routes/users';
 import notificationRoutes from './routes/notifications';
 import auditLogRoutes from './routes/audit-logs';
@@ -34,6 +35,7 @@ import { verifyMoyasarWebhook, webhookIdempotency, logWebhookEvent } from './mid
 import { initErrorTracking, errorTrackingMiddleware } from './core/errorTracking';
 import { sanitizeApiError } from './core/apiErrors';
 import { startScheduledJobs } from './core/jobs/scheduler';
+import { getMonitoringSnapshot } from './core/monitoring/opsMetrics';
 import prisma from './core/db';
 
 // Initialize error tracking
@@ -78,6 +80,7 @@ app.get('/health', async (req, res) => {
       timestamp: new Date().toISOString(),
       uptime: process.uptime(),
       environment: config.nodeEnv,
+      monitoring: getMonitoringSnapshot(),
     });
   } catch (error) {
     res.status(503).json({ 
@@ -114,6 +117,7 @@ app.use('/api/organizations', organizationRoutes);
 app.use('/api/onboarding', onboardingRoutes);
 app.use('/api/public', publicRoutes);
 app.use('/api/public/membership', publicMembershipRoutes);
+app.use('/api/public/pmo', publicPmoRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/audit-logs', auditLogRoutes);

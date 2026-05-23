@@ -375,6 +375,17 @@ router.post('/applications', requirePermission('hr.recruitment.create'), async (
       },
     });
 
+    const { sendEmailQueued } = await import('../../core/email');
+    const { applicationReceivedEmail } = await import('../../core/email/operationalEmails');
+    const { getOrgEmailBrand } = await import('../../core/auth/magicLink');
+    const brand = await getOrgEmailBrand(req.org.id, 'hr');
+    const tpl = applicationReceivedEmail({
+      applicantName,
+      jobTitle: jobPosting.title,
+      brand,
+    });
+    sendEmailQueued({ to: applicantEmail, subject: tpl.subject, html: tpl.html, priority: 'normal' }).catch(() => {});
+
     res.status(201).json(application);
   } catch (error) {
     console.error('Error creating job application:', error);

@@ -259,6 +259,7 @@ router.post('/', authMiddleware, requirePermission('users.create'), async (req: 
             isActive: true,
           },
         },
+        organization: { select: { name: true } },
         membershipRoles: {
           include: {
             role: {
@@ -272,6 +273,20 @@ router.post('/', authMiddleware, requirePermission('users.create'), async (req: 
         },
       },
     });
+
+    if (createdMembership?.user.email) {
+      const { sendEmailQueued } = await import('../core/email');
+      const { userInvitedEmail, loginUrl } = await import('../core/email/operationalEmails');
+      const { getOrgEmailBrand } = await import('../core/auth/magicLink');
+      const brand = await getOrgEmailBrand(req.org.id, 'default');
+      const tpl = userInvitedEmail({
+        userName: createdMembership.user.name || createdMembership.user.email,
+        orgName: createdMembership.organization.name,
+        loginUrl: loginUrl(),
+        brand,
+      });
+      sendEmailQueued({ to: createdMembership.user.email, subject: tpl.subject, html: tpl.html, priority: 'normal' }).catch(() => {});
+    }
 
     res.status(201).json({
       id: createdMembership!.user.id,

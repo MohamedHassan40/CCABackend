@@ -62,6 +62,11 @@ export const pmoManifest: ModuleManifest = {
       label: 'Tasks',
       permission: 'pmo.tasks.view',
     },
+    {
+      path: '/pmo/resources',
+      label: 'Resource loading',
+      permission: 'pmo.projects.view',
+    },
   ],
   dashboardWidgets: [
     {
@@ -1906,6 +1911,83 @@ router.get('/widgets/project-count', requirePermission('pmo.projects.view'), asy
     res.json({ count });
   } catch (error) {
     console.error('Error fetching project count:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// GET /api/pmo/resources/loading — cross-project resource utilization
+router.get('/resources/loading', requirePermission('pmo.projects.view'), async (req, res) => {
+  try {
+    if (!req.org) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+    const orgId = req.org.id;
+    const tasks = await prisma.projectTask.findMany({
+      where: {
+        orgId,
+        project: { status: { in: ['planning', 'active', 'on_hold'] } },
+        assigneeId: { not: null },
+        status: { in: ['submitted', 'in_progress', 'review'] },
+      },
+      select: {
+        id: true,
+        title: true,
+        status: true,
+        estimatedMinutes: true,
+        assigneeId: true,
+        assignee: { select: { id: true, fullName: true, email: true, userId: true } },
+        project: { select: { id: true, name: true } },
+      },
+    });
+
+    const byAssignee = new Map<
+      string,
+      {
+        employeeId: string;
+        userId: string | null;
+        name: string;
+        email: string;
+        openTasks: number;
+        estimatedMinutes: number;
+        projects: Set<string>;
+      }
+    >();
+
+    for (const t of tasks) {
+      if (!t.assigneeId || !t.assignee) continue;
+      const displayName = t.assignee.fullName || t.assignee.email || 'Employee';
+      const row = byAssignee.get(t.assigneeId) ?? {
+        employeeId: t.assigneeId,
+        userId: t.assignee.userId,
+        name: displayName,
+        email: t.assignee.email ?? '',
+        openTasks: 0,
+        estimatedMinutes: 0,
+        projects: new Set<string>(),
+      };
+      row.openTasks++;
+      row.estimatedMinutes += t.estimatedMinutes ?? 0;
+      row.projects.add(t.project.name);
+      byAssignee.set(t.assigneeId, row);
+    }
+
+    res.json(
+      Array.from(byAssignee.values())
+        .map((r) => ({
+          employeeId: r.employeeId,
+          userId: r.userId,
+          name: r.name,
+          email: r.email,
+          openTasks: r.openTasks,
+          estimatedHours: Math.round((r.estimatedMinutes / 60) * 10) / 10,
+          projectCount: r.projects.size,
+          projects: Array.from(r.projects),
+        }))
+        .sort((a, b) => b.openTasks - a.openTasks)
+    );
+  } catch (error) {
+    console.error('Error fetching resource loading:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 });

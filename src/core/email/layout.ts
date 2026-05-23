@@ -6,6 +6,9 @@ export interface CcaEmailShellOptions {
   title: string;
   /** Main HTML fragment (already safe or escaped where needed) */
   innerHtml: string;
+  brandName?: string;
+  brandTagline?: string;
+  brandPrimaryColor?: string;
 }
 
 /**
@@ -13,6 +16,9 @@ export interface CcaEmailShellOptions {
  */
 export function ccaEmailShell(opts: CcaEmailShellOptions): string {
   const preheader = opts.previewText;
+  const brandName = opts.brandName ?? 'CCA System';
+  const brandTagline = opts.brandTagline ?? 'Cloud Business Platform';
+  const headerColor = opts.brandPrimaryColor ?? T.primary;
   return `<!DOCTYPE html>
 <html lang="en" xmlns="http://www.w3.org/1999/xhtml">
 <head>
@@ -28,12 +34,12 @@ export function ccaEmailShell(opts: CcaEmailShellOptions): string {
       <td align="center">
         <table role="presentation" width="600" cellspacing="0" cellpadding="0" style="max-width:600px;width:100%;background:${T.card};border-radius:${T.radius};border:1px solid ${T.border};overflow:hidden;box-shadow:0 4px 24px rgba(15,23,42,0.06);">
           <tr>
-            <td style="padding:0;background:linear-gradient(135deg,${T.primary} 0%,${T.cloud} 100%);">
+            <td style="padding:0;background:linear-gradient(135deg,${headerColor} 0%,${T.cloud} 100%);">
               <table role="presentation" width="100%" cellspacing="0" cellpadding="0">
                 <tr>
                   <td style="padding:20px 28px;">
-                    <p style="margin:0;font-size:20px;font-weight:700;letter-spacing:-0.02em;color:#ffffff;">CCA System</p>
-                    <p style="margin:6px 0 0;font-size:13px;color:rgba(255,255,255,0.9);">Cloud Business Platform</p>
+                    <p style="margin:0;font-size:20px;font-weight:700;letter-spacing:-0.02em;color:#ffffff;">${brandName}</p>
+                    <p style="margin:6px 0 0;font-size:13px;color:rgba(255,255,255,0.9);">${brandTagline}</p>
                   </td>
                 </tr>
               </table>
@@ -48,7 +54,7 @@ export function ccaEmailShell(opts: CcaEmailShellOptions): string {
           <tr>
             <td style="padding:16px 28px 24px;border-top:1px solid ${T.border};background:${T.background};">
               <p style="margin:0;font-size:12px;line-height:1.5;color:${T.muted};">
-                You received this message from <strong style="color:${T.foreground};">CCA System</strong>.
+                You received this message from <strong style="color:${T.foreground};">${brandName}</strong>.
                 If you did not expect this email, you can ignore it.
               </p>
             </td>

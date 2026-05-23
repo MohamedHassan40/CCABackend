@@ -63,6 +63,8 @@ export type MeResponse = {
     organizationHrCode?: string | null;
     /** HR: employee IDs follow org scheme only; manual edits disabled */
     employeeIdSchemeLocked?: boolean;
+    /** Per-module email branding (default, membership, ticketing, pmo) */
+    emailBranding?: Record<string, unknown> | null;
   } | null;
   memberships: Array<{
     id: string;

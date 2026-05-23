@@ -68,9 +68,27 @@ model User {
   absenceDeductionDecisions AbsenceDeductionDecision[] @relation("DeductionDecisionCreatedBy")
   employeeRequestsCreated   EmployeeRequest[]          @relation("EmployeeRequestCreatedBy")
   employeeRequestsApproved EmployeeRequest[]          @relation("EmployeeRequestApprovedBy")
+  magicLoginTokens         MagicLoginToken[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+}
+
+model MagicLoginToken {
+  id           String    @id @default(cuid())
+  token        String    @unique
+  userId       String
+  orgId        String?
+  redirectPath String?
+  expiresAt    DateTime
+  usedAt       DateTime?
+  createdAt    DateTime  @default(now())
+
+  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization Organization? @relation(fields: [orgId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([expiresAt])
 }
 
 model Organization {
@@ -87,6 +105,8 @@ model Organization {
   expiresAt         DateTime? // Organization-level subscription/contract expiry (null = no expiry)
   currentBundleId    String? // Assigned package/bundle (drives optional limits and display)
   storefrontSettings Json? // Storefront customization settings (hero, sections, etc.)
+  /// Per-module email branding: { default?, membership?, ticketing?, pmo?, hr? }
+  emailBranding      Json?
 
   currentBundle      Bundle?         @relation("OrganizationCurrentBundle", fields: [currentBundleId], references: [id], onDelete: SetNull)
   memberships        Membership[]
@@ -146,6 +166,7 @@ model Organization {
   projectTasks          ProjectTask[]
   projectTaskTimeEntries ProjectTaskTimeEntry[]
   departments           Department[]
+  magicLoginTokens      MagicLoginToken[]
 
   /// HR: prefix before numeric part (e.g. "Emp-" or "Employee - ")
   employeeCodePrefix    String?
@@ -1400,6 +1421,7 @@ model Project {
   currency        String    @default("SAR")
   spentCents      Int       @default(0) // Amount spent so far
   notes           String?
+  portalToken     String?   @unique // Public client status portal token
 
   organization          Organization           @relation(fields: [orgId], references: [id], onDelete: Cascade)
   projectManagers       ProjectManager[]

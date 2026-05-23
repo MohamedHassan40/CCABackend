@@ -1111,8 +1111,59 @@ router.post('/members', requirePermission('membership.members.create'), async (r
 
     const orgFmtCreate = await prisma.organization.findUnique({
       where: { id: req.org.id },
-      select: { membershipNumberPrefix: true, membershipNumberPadLength: true },
+      select: {
+        membershipNumberPrefix: true,
+        membershipNumberPadLength: true,
+        name: true,
+        slug: true,
+      },
     });
+
+  try {
+    const { linkMemberRecordToUser, provisionMemberLoginAccount, ensureOrgMemberRole } =
+      await import('../../core/membership/memberAccounts');
+    const { createMagicLoginToken, magicLinkUrl, getOrgEmailBrand } =
+      await import('../../core/auth/magicLink');
+    const crypto = await import('crypto');
+
+    let user = await prisma.user.findUnique({ where: { email: emailTrim } });
+    if (!user) {
+      const tempPass = crypto.randomBytes(18).toString('base64url');
+      const account = await provisionMemberLoginAccount({
+        orgId: req.org!.id,
+        email: emailTrim,
+        name: String(memberName).trim(),
+        password: tempPass,
+      });
+      if (account) user = await prisma.user.findUnique({ where: { id: account.userId } });
+    } else {
+      await ensureOrgMemberRole(user.id, req.org!.id);
+    }
+    if (user) {
+      await linkMemberRecordToUser(membership.id, user.id);
+      const magicToken = await createMagicLoginToken({
+        userId: user.id,
+        orgId: req.org!.id,
+        redirectPath: orgFmtCreate?.slug ? `/membership/${orgFmtCreate.slug}/account` : '/dashboard',
+      });
+      const { sendEmailQueued, emailTemplates } = await import('../../core/email');
+      const brand = await getOrgEmailBrand(req.org!.id, 'membership');
+      const tpl = emailTemplates.memberPortalInvite(
+        membership.memberName,
+        orgFmtCreate?.name ?? 'Organization',
+        magicLinkUrl(magicToken),
+        brand
+      );
+      void sendEmailQueued({
+        to: emailTrim,
+        subject: tpl.subject,
+        html: tpl.html,
+        priority: 'normal',
+      });
+    }
+  } catch (inviteErr) {
+    console.error('Member portal invite after create:', inviteErr);
+  }
 
     res.status(201).json({
       ...membership,
@@ -1750,6 +1801,22 @@ router.get('/analytics', requirePermission('membership.members.view'), async (re
       signupsByMonth.push({ month: label, count });
     }
 
+    const cohortLtv = Array.from(revenueByType.values()).map((row) => {
+      const typeMembers = members.filter((m) => m.membershipTypeId === row.typeId);
+      const paid = typeMembers.filter((m) => m.paymentStatus === 'paid' && m.paymentAmount);
+      const avgLtvCents =
+        paid.length > 0
+          ? Math.round(paid.reduce((s, m) => s + (m.paymentAmount ?? 0), 0) / paid.length)
+          : 0;
+      return {
+        typeId: row.typeId,
+        typeName: row.typeName,
+        memberCount: typeMembers.length,
+        avgLtvCents,
+        totalRevenueCents: row.revenueCents,
+      };
+    });
+
     res.json({
       summary: {
         totalMembers: members.length,
@@ -1760,14 +1827,61 @@ router.get('/analytics', requirePermission('membership.members.view'), async (re
         totalRevenueCents: members
           .filter((m) => m.paymentStatus === 'paid' && m.paymentAmount)
           .reduce((s, m) => s + (m.paymentAmount ?? 0), 0),
+        avgLtvCents:
+          members.filter((m) => m.paymentStatus === 'paid' && m.paymentAmount).length > 0
+            ? Math.round(
+                members
+                  .filter((m) => m.paymentStatus === 'paid' && m.paymentAmount)
+                  .reduce((s, m) => s + (m.paymentAmount ?? 0), 0) /
+                  members.filter((m) => m.paymentStatus === 'paid' && m.paymentAmount).length
+              )
+            : 0,
       },
       revenueByType: Array.from(revenueByType.values()).sort((a, b) => b.revenueCents - a.revenueCents),
+      cohortLtv,
       renewalsByMonth,
       signupsByMonth,
       periodStart: start,
     });
   } catch (error: unknown) {
     console.error('Error fetching membership analytics:', error);
+    const msg = error instanceof Error ? error.message : 'Internal server error';
+    res.status(500).json({ error: msg });
+  }
+});
+
+// GET /api/membership/analytics/export — CSV export
+router.get('/analytics/export', requirePermission('membership.members.view'), async (req: Request, res: Response) => {
+  try {
+    if (!req.org) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+    const members = await prisma.memberMembership.findMany({
+      where: { orgId: req.org.id },
+      include: { membershipType: { select: { name: true } } },
+      orderBy: { createdAt: 'desc' },
+    });
+    const lines = [
+      'memberName,memberEmail,type,status,paymentStatus,paymentAmountCents,startDate,endDate,createdAt',
+      ...members.map((m) =>
+        [
+          JSON.stringify(m.memberName),
+          JSON.stringify(m.memberEmail),
+          JSON.stringify(m.membershipType.name),
+          m.status,
+          m.paymentStatus,
+          m.paymentAmount ?? '',
+          m.startDate.toISOString().slice(0, 10),
+          m.endDate.toISOString().slice(0, 10),
+          m.createdAt.toISOString().slice(0, 10),
+        ].join(',')
+      ),
+    ];
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', 'attachment; filename="membership-analytics.csv"');
+    res.send(lines.join('\n'));
+  } catch (error: unknown) {
     const msg = error instanceof Error ? error.message : 'Internal server error';
     res.status(500).json({ error: msg });
   }

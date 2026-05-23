@@ -465,6 +465,33 @@ router.post('/:id/cancel', requirePermission('subscriptions.manage'), async (req
       },
     });
 
+    const ownerMembership = await prisma.membership.findFirst({
+      where: {
+        organizationId: req.org.id,
+        isActive: true,
+        membershipRoles: { some: { role: { key: 'owner' } } },
+      },
+      include: { user: { select: { email: true } } },
+    });
+    const orgRow = await prisma.organization.findUnique({
+      where: { id: req.org.id },
+      select: { name: true },
+    });
+    if (ownerMembership?.user.email && updated.module) {
+      const { sendEmailQueued } = await import('../../core/email');
+      const { subscriptionCancelledEmail } = await import('../../core/email/operationalEmails');
+      const { getOrgEmailBrand } = await import('../../core/auth/magicLink');
+      const brand = await getOrgEmailBrand(req.org.id, 'default');
+      const endDate = updated.currentPeriodEnd ?? new Date();
+      const tpl = subscriptionCancelledEmail({
+        orgName: req.org.name,
+        moduleName: updated.module.name,
+        endDate,
+        brand,
+      });
+      sendEmailQueued({ to: ownerMembership.user.email, subject: tpl.subject, html: tpl.html, priority: 'normal' }).catch(() => {});
+    }
+
     res.json({
       message: cancelAtPeriodEnd
         ? 'Subscription will be canceled at the end of the billing period'

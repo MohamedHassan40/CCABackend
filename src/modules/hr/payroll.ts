@@ -289,7 +289,7 @@ router.put('/:id', requirePermission('hr.payroll.edit'), async (req, res) => {
         id,
         orgId: req.org.id,
       },
-      include: { employee: { select: { id: true, userId: true } } },
+      include: { employee: { select: { id: true, userId: true, fullName: true, email: true } } },
     });
 
     if (!payrollRecord) {
@@ -336,6 +336,19 @@ router.put('/:id', requirePermission('hr.payroll.edit'), async (req, res) => {
         message: 'Your payroll has been marked as paid.',
         link: '/dashboard/hr/payroll',
       }).catch(() => {});
+    }
+    if (status === 'paid' && !payrollRecord.paidAt && payrollRecord.employee.email) {
+      const { sendEmailQueued } = await import('../../core/email');
+      const { payrollPaidEmail } = await import('../../core/email/operationalEmails');
+      const { getOrgEmailBrand } = await import('../../core/auth/magicLink');
+      const brand = await getOrgEmailBrand(req.org!.id, 'hr');
+      const periodLabel = `${payrollRecord.payPeriodStart.toISOString().slice(0, 10)} – ${payrollRecord.payPeriodEnd.toISOString().slice(0, 10)}`;
+      const tpl = payrollPaidEmail({
+        employeeName: payrollRecord.employee.fullName,
+        periodLabel,
+        brand,
+      });
+      sendEmailQueued({ to: payrollRecord.employee.email, subject: tpl.subject, html: tpl.html, priority: 'normal' }).catch(() => {});
     }
     if (status === 'paid' && !payrollRecord.paidAt) {
       createAuditLog({
@@ -450,6 +463,20 @@ router.put('/:id/approve', requirePermission('hr.payroll.approve'), async (req, 
         message: 'Your payroll record has been approved.',
         link: '/dashboard/hr/payroll',
       }).catch(() => {});
+    }
+
+    if (payrollRecord.employee.email) {
+      const { sendEmailQueued } = await import('../../core/email');
+      const { payrollApprovedEmail } = await import('../../core/email/operationalEmails');
+      const { getOrgEmailBrand } = await import('../../core/auth/magicLink');
+      const brand = await getOrgEmailBrand(req.org.id, 'hr');
+      const periodLabel = `${payrollRecord.payPeriodStart.toISOString().slice(0, 10)} – ${payrollRecord.payPeriodEnd.toISOString().slice(0, 10)}`;
+      const tpl = payrollApprovedEmail({
+        employeeName: payrollRecord.employee.fullName,
+        periodLabel,
+        brand,
+      });
+      sendEmailQueued({ to: payrollRecord.employee.email, subject: tpl.subject, html: tpl.html, priority: 'normal' }).catch(() => {});
     }
 
     createAuditLog({

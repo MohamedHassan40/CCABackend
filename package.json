@@ -19,7 +19,7 @@
     "test:ui": "vitest --ui",
     "test:modules": "vitest run tests/modules",
     "test:integration": "vitest run tests/integration",
-    "test:unit": "vitest run tests/unit"
+    "test:unit": "vitest run -c vitest.unit.config.ts"
   },
   "dependencies": {
     "@prisma/client": "^5.7.1",

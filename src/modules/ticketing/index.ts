@@ -388,6 +388,21 @@ router.post('/tickets', requirePermission('ticketing.tickets.create'), async (re
         message: `Ticket: ${ticket.title}`,
         link: `/dashboard/ticketing/tickets/${ticket.id}`,
       }).catch(() => {});
+
+      if (ticket.assignee?.email) {
+        const { sendEmailQueued } = await import('../../core/email');
+        const { ticketAssignedEmail } = await import('../../core/email/operationalEmails');
+        const { getOrgEmailBrand } = await import('../../core/auth/magicLink');
+        const fe = (process.env.FRONTEND_URL || process.env.CLIENT_URL || 'http://localhost:3000').replace(/\/$/, '');
+        const brand = await getOrgEmailBrand(req.org!.id, 'ticketing');
+        const tpl = ticketAssignedEmail({
+          ticketId: ticket.id,
+          title: ticket.title,
+          dashboardUrl: `${fe}/dashboard/ticketing/tickets/${ticket.id}`,
+          brand,
+        });
+        sendEmailQueued({ to: ticket.assignee.email, subject: tpl.subject, html: tpl.html, priority: 'normal' }).catch(() => {});
+      }
     }
 
     res.status(201).json(ticket);
@@ -526,6 +541,25 @@ router.put('/tickets/:id', requirePermission('ticketing.tickets.edit'), async (r
           message: `Ticket: ${updated.title}`,
           link: `/dashboard/ticketing/tickets/${id}`,
         }).catch(() => {});
+
+        const assigneeUser = await prisma.user.findUnique({
+          where: { id: assigneeId },
+          select: { email: true },
+        });
+        if (assigneeUser?.email) {
+          const { sendEmailQueued } = await import('../../core/email');
+          const { ticketAssignedEmail } = await import('../../core/email/operationalEmails');
+          const { getOrgEmailBrand } = await import('../../core/auth/magicLink');
+          const fe = (process.env.FRONTEND_URL || process.env.CLIENT_URL || 'http://localhost:3000').replace(/\/$/, '');
+          const brand = await getOrgEmailBrand(req.org!.id, 'ticketing');
+          const tpl = ticketAssignedEmail({
+            ticketId: id,
+            title: updated.title,
+            dashboardUrl: `${fe}/dashboard/ticketing/tickets/${id}`,
+            brand,
+          });
+          sendEmailQueued({ to: assigneeUser.email, subject: tpl.subject, html: tpl.html, priority: 'normal' }).catch(() => {});
+        }
       }
       createAuditLog({
         userId: req.user!.id,
@@ -754,7 +788,13 @@ router.post('/tickets/:id/comments', requirePermission('ticketing.tickets.edit')
         id,
         orgId: req.org.id,
       },
-      select: { createdById: true, assigneeId: true, firstResponseAt: true, title: true },
+      select: {
+        createdById: true,
+        assigneeId: true,
+        firstResponseAt: true,
+        title: true,
+        submittedByEmail: true,
+      },
     });
 
     if (!ticket) {
@@ -802,6 +842,36 @@ router.post('/tickets/:id/comments', requirePermission('ticketing.tickets.edit')
         message: `${ticket.title}: new ${isInternal === true ? 'internal note' : 'comment'}`,
         link: `/dashboard/ticketing/tickets/${id}`,
       }).catch(() => {});
+    }
+
+    if (!(isInternal === true) && ticket.submittedByEmail) {
+      try {
+        const orgRow = await prisma.organization.findUnique({
+          where: { id: req.org.id },
+          select: { name: true, slug: true },
+        });
+        const { sendEmailQueued, emailTemplates } = await import('../../core/email');
+        const { getOrgEmailBrand } = await import('../../core/auth/magicLink');
+        const brand = await getOrgEmailBrand(req.org.id, 'ticketing');
+        const trackUrl = `${process.env.FRONTEND_URL || 'http://localhost:3000'}/support/${orgRow?.slug}/track?ticketId=${encodeURIComponent(id)}&email=${encodeURIComponent(ticket.submittedByEmail)}`;
+        const preview = String(content).trim().slice(0, 500);
+        const tpl = emailTemplates.ticketAgentReplyToCustomer(
+          orgRow?.name || 'Support',
+          id,
+          ticket.title,
+          preview,
+          trackUrl,
+          brand
+        );
+        sendEmailQueued({
+          to: ticket.submittedByEmail,
+          subject: tpl.subject,
+          html: tpl.html,
+          priority: 'normal',
+        }).catch(() => {});
+      } catch {
+        /* optional */
+      }
     }
 
     res.status(201).json(comment);

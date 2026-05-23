@@ -3,6 +3,7 @@ import type { MoyasarInvoice } from './moyasar';
 import prisma from '../db';
 import { addCalendarMonths } from '../dates/membershipEndDate';
 import { sendMembershipPaymentConfirmedEmail } from '../membership/memberEmails';
+import { recordWebhookMetric } from '../monitoring/opsMetrics';
 
 function mergeMetadata(body: Record<string, unknown>, invoice: MoyasarInvoice): Record<string, unknown> {
   const fromInvoice =
@@ -172,6 +173,12 @@ export async function handleMembershipPaymentCallback(req: Request, res: Respons
         (invoice.status === 'failed' || invoice.status === 'expired')
       ) {
         await markMembershipPaymentFailed(metadata.memberMembershipId, invoice.id);
+        recordWebhookMetric({
+          type: 'membership_payment',
+          status: 'failed',
+          invoiceId: invoice.id,
+          error: `Invoice status: ${invoice.status}`,
+        });
       }
       res.json({ received: true, message: 'Payment not completed yet' });
       return;
@@ -179,13 +186,30 @@ export async function handleMembershipPaymentCallback(req: Request, res: Respons
 
     const result = await activateMembershipFromPaidMoyasarInvoice(invoice, body);
     if (!result.ok) {
+      recordWebhookMetric({
+        type: 'membership_payment',
+        status: 'failed',
+        invoiceId: invoice.id,
+        error: result.error,
+      });
       res.status(400).json({ error: result.error });
       return;
     }
 
+    recordWebhookMetric({
+      type: 'membership_payment',
+      status: 'success',
+      invoiceId: invoice.id,
+    });
+
     res.json({ success: true, membershipId: result.membershipId });
   } catch (error) {
     console.error('Membership payment callback error:', error);
+    recordWebhookMetric({
+      type: 'membership_payment',
+      status: 'failed',
+      error: error instanceof Error ? error.message : 'unknown',
+    });
     res.status(500).json({ error: 'Internal server error' });
   }
 }

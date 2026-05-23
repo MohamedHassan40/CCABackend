@@ -2,6 +2,8 @@ import { Router, Request, Response } from 'express';
 import prisma from '../core/db';
 import { publicTicketRateLimiter } from '../middleware/security';
 import { createNotificationForOrgWithPermission } from '../core/notifications/helper';
+import { publicTicketUpload, verifyPublicTicketAccess } from '../core/ticketing/publicUpload';
+import { storageService } from '../core/storage';
 
 const router = Router();
 
@@ -786,7 +788,7 @@ router.get('/tickets/:orgSlug/track', async (req: Request, res: Response) => {
 router.post('/tickets/:orgSlug/reply', publicTicketRateLimiter, async (req: Request, res: Response) => {
   try {
     const { orgSlug } = req.params;
-    const { ticketId, email, content, name } = req.body;
+    const { ticketId, email, content, name, attachmentFileIds } = req.body;
 
     if (!ticketId || !email || !content) {
       res.status(400).json({ error: 'ticketId, email, and content are required' });
@@ -851,6 +853,17 @@ router.post('/tickets/:orgSlug/reply', publicTicketRateLimiter, async (req: Requ
       data: updateData,
     });
 
+    if (Array.isArray(attachmentFileIds) && attachmentFileIds.length > 0) {
+      await prisma.file.updateMany({
+        where: {
+          id: { in: attachmentFileIds.map(String) },
+          organizationId: org.id,
+          ticketId: ticket.id,
+        },
+        data: { entityType: 'ticket', entityId: ticket.id },
+      });
+    }
+
     if (ticket.assigneeId) {
       const { createNotification } = await import('../core/notifications/helper');
       createNotification({
@@ -902,6 +915,57 @@ router.post('/tickets/:orgSlug/reply', publicTicketRateLimiter, async (req: Requ
     res.status(500).json({ error: 'Internal server error' });
   }
 });
+
+// POST /api/public/tickets/:orgSlug/attachments — public ticket attachment (ticketId + email required)
+router.post(
+  '/tickets/:orgSlug/attachments',
+  publicTicketRateLimiter,
+  publicTicketUpload.single('file'),
+  async (req: Request, res: Response) => {
+    try {
+      const { orgSlug } = req.params;
+      const ticketId = String(req.body.ticketId || '').trim();
+      const email = String(req.body.email || '').trim();
+      if (!ticketId || !email || !req.file) {
+        res.status(400).json({ error: 'ticketId, email, and file are required' });
+        return;
+      }
+      const org = await prisma.organization.findUnique({
+        where: { slug: orgSlug, isActive: true },
+        select: { id: true },
+      });
+      if (!org) {
+        res.status(404).json({ error: 'Organization not found' });
+        return;
+      }
+      const access = await verifyPublicTicketAccess(org.id, ticketId, email);
+      if (!access) {
+        res.status(403).json({ error: 'Email does not match this ticket' });
+        return;
+      }
+      const uploaded = await storageService.uploadFile(req.file, `tickets/${ticketId}`);
+      const file = await prisma.file.create({
+        data: {
+          organizationId: org.id,
+          fileName: uploaded.fileName,
+          originalName: req.file.originalname,
+          mimeType: uploaded.mimeType,
+          size: uploaded.size,
+          url: uploaded.url,
+          storageType: uploaded.storageType,
+          storageKey: uploaded.storageKey,
+          entityType: 'ticket',
+          entityId: ticketId,
+          ticketId,
+        },
+      });
+      res.status(201).json({ id: file.id, url: file.url, originalName: file.originalName });
+    } catch (error) {
+      console.error('Public ticket attachment upload:', error);
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  }
+);
 
 export default router;
 

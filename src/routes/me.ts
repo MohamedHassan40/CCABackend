@@ -213,6 +213,12 @@ router.get('/', authMiddleware, async (req: Request, res: Response) => {
           : false,
         organizationHrCode: currentOrg.organizationHrCode ?? null,
         employeeIdSchemeLocked: currentOrg.employeeIdSchemeLocked ?? false,
+        emailBranding:
+          currentOrg.emailBranding &&
+          typeof currentOrg.emailBranding === 'object' &&
+          !Array.isArray(currentOrg.emailBranding)
+            ? (currentOrg.emailBranding as Record<string, unknown>)
+            : null,
       },
       roles,
       isOrgAdmin,

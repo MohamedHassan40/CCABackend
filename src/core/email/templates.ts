@@ -2,8 +2,22 @@ import { CCA_EMAIL as T } from './branding';
 import { escapeHtml } from './htmlEscape';
 import { ccaButton, ccaEmailShell, ccaMutedBox } from './layout';
 
+import type { EmailBrandConfig } from '../auth/magicLink';
+
 function p(text: string): string {
   return `<p style="margin:0 0 12px;font-size:15px;line-height:1.55;color:${T.foreground};">${text}</p>`;
+}
+
+function brandedShell(
+  opts: Parameters<typeof ccaEmailShell>[0],
+  brand?: EmailBrandConfig | null
+): string {
+  return ccaEmailShell({
+    ...opts,
+    brandName: brand?.name ?? opts.brandName,
+    brandTagline: brand?.tagline ?? opts.brandTagline,
+    brandPrimaryColor: brand?.primaryColor ?? opts.brandPrimaryColor,
+  });
 }
 
 export const emailTemplates = {
@@ -460,4 +474,102 @@ export const emailTemplates = {
       }),
     };
   },
+
+  magicLinkLogin: (userName: string, loginUrl: string, expiresMinutes: number, brand?: EmailBrandConfig | null) => ({
+    subject: 'Your sign-in link',
+    html: brandedShell(
+      {
+        previewText: 'Use this link to sign in securely',
+        title: 'Sign in',
+        innerHtml: `
+          ${p(`Hello ${escapeHtml(userName)},`)}
+          ${p(`Use the button below to sign in. This link expires in ${expiresMinutes} minutes.`)}
+          ${ccaButton(loginUrl, 'Sign in')}
+          ${ccaMutedBox('If you did not request this link, you can ignore this email.')}
+        `,
+      },
+      brand
+    ),
+  }),
+
+  memberPortalInvite: (memberName: string, orgName: string, loginUrl: string, brand?: EmailBrandConfig | null) => ({
+    subject: `Your ${orgName} member portal`,
+    html: brandedShell(
+      {
+        previewText: 'Access your membership card and renew online',
+        title: 'Member portal ready',
+        innerHtml: `
+          ${p(`Hello ${escapeHtml(memberName)},`)}
+          ${p(`Your member account for <strong>${escapeHtml(orgName)}</strong> is ready.`)}
+          ${ccaButton(loginUrl, 'Open member portal')}
+        `,
+      },
+      brand
+    ),
+  }),
+
+  ticketAgentReplyToCustomer: (
+    orgName: string,
+    ticketId: string,
+    title: string,
+    replyPreview: string,
+    trackUrl: string,
+    brand?: EmailBrandConfig | null
+  ) => ({
+    subject: `Reply on your ticket — ${orgName}`,
+    html: brandedShell(
+      {
+        previewText: replyPreview.slice(0, 120),
+        title: 'New reply from support',
+        innerHtml: `
+          ${p(`Your ticket <strong>${escapeHtml(ticketId)}</strong> has a new reply.`)}
+          ${p(`<strong>Subject:</strong> ${escapeHtml(title)}`)}
+          ${ccaMutedBox(escapeHtml(replyPreview).replace(/\n/g, '<br />'))}
+          ${ccaButton(trackUrl, 'View full conversation')}
+        `,
+      },
+      brand
+    ),
+  }),
+
+  slaBreachToAssignee: (
+    ticketTitle: string,
+    breachType: string,
+    dashboardUrl: string,
+    brand?: EmailBrandConfig | null
+  ) => ({
+    subject: `SLA ${breachType}: ${ticketTitle}`,
+    html: brandedShell(
+      {
+        previewText: `SLA ${breachType} on ${ticketTitle}`,
+        title: 'SLA alert',
+        innerHtml: `
+          ${p(`Ticket <strong>${escapeHtml(ticketTitle)}</strong> — ${escapeHtml(breachType)}.`)}
+          ${ccaButton(dashboardUrl, 'Open ticket')}
+        `,
+      },
+      brand
+    ),
+  }),
+
+  pmoBudgetAlert: (
+    orgName: string,
+    projectName: string,
+    usedPct: number,
+    projectUrl: string,
+    brand?: EmailBrandConfig | null
+  ) => ({
+    subject: `Budget alert: ${projectName}`,
+    html: brandedShell(
+      {
+        previewText: `${projectName} is at ${usedPct}% of budget`,
+        title: 'Budget alert',
+        innerHtml: `
+          ${p(`Project <strong>${escapeHtml(projectName)}</strong> at ${escapeHtml(orgName)} has reached <strong>${usedPct}%</strong> of budget.`)}
+          ${ccaButton(projectUrl, 'Review project')}
+        `,
+      },
+      brand
+    ),
+  }),
 };

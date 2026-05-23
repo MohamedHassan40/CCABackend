@@ -367,7 +367,7 @@ router.put('/requests/:id/approve', requirePermission('hr.leave.approve'), async
       },
       include: {
         leaveType: true,
-        employee: { select: { fullName: true, userId: true } },
+        employee: { select: { fullName: true, userId: true, email: true } },
       },
     });
 
@@ -430,6 +430,20 @@ router.put('/requests/:id/approve', requirePermission('hr.leave.approve'), async
       }).catch(() => {});
     }
 
+    if (leaveRequest.employee.email) {
+      const { sendEmailQueued } = await import('../../core/email');
+      const { leaveApprovedEmail } = await import('../../core/email/operationalEmails');
+      const { getOrgEmailBrand } = await import('../../core/auth/magicLink');
+      const brand = await getOrgEmailBrand(req.org.id, 'hr');
+      const tpl = leaveApprovedEmail({
+        employeeName: leaveRequest.employee.fullName,
+        days: leaveRequest.days,
+        leaveTypeName: leaveRequest.leaveType.name,
+        brand,
+      });
+      sendEmailQueued({ to: leaveRequest.employee.email, subject: tpl.subject, html: tpl.html, priority: 'normal' }).catch(() => {});
+    }
+
     createAuditLog({
       userId: req.user.id,
       organizationId: req.org.id,
@@ -464,7 +478,7 @@ router.put('/requests/:id/reject', requirePermission('hr.leave.approve'), async 
         orgId: req.org.id,
         status: 'pending',
       },
-      include: { employee: { select: { userId: true, fullName: true } }, leaveType: true },
+      include: { employee: { select: { userId: true, fullName: true, email: true } }, leaveType: true },
     });
 
     if (!leaveRequest) {
@@ -491,6 +505,21 @@ router.put('/requests/:id/reject', requirePermission('hr.leave.approve'), async 
         message: `Your request for ${leaveRequest.days} day(s) of ${leaveRequest.leaveType.name} was rejected.${rejectionReason ? ` Reason: ${rejectionReason}` : ''}`,
         link: '/dashboard/hr/leave',
       }).catch(() => {});
+    }
+
+    if (leaveRequest.employee.email) {
+      const { sendEmailQueued } = await import('../../core/email');
+      const { leaveRejectedEmail } = await import('../../core/email/operationalEmails');
+      const { getOrgEmailBrand } = await import('../../core/auth/magicLink');
+      const brand = await getOrgEmailBrand(req.org.id, 'hr');
+      const tpl = leaveRejectedEmail({
+        employeeName: leaveRequest.employee.fullName,
+        days: leaveRequest.days,
+        leaveTypeName: leaveRequest.leaveType.name,
+        reason: rejectionReason,
+        brand,
+      });
+      sendEmailQueued({ to: leaveRequest.employee.email, subject: tpl.subject, html: tpl.html, priority: 'normal' }).catch(() => {});
     }
 
     createAuditLog({

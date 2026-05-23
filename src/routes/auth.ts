@@ -503,6 +503,132 @@ router.post(
   }
 );
 
+// POST /api/auth/magic-link/send — passwordless sign-in link
+router.post(
+  '/magic-link/send',
+  authRateLimiter,
+  validateInput({
+    body: {
+      email: (v) => validators.required(v) && validators.email(v),
+    },
+  }),
+  async (req: Request, res: Response) => {
+    try {
+      const email = String(req.body.email).toLowerCase().trim();
+      const orgSlug = req.body.orgSlug ? String(req.body.orgSlug).trim() : undefined;
+      const redirectPath = req.body.redirect ? String(req.body.redirect).trim() : undefined;
+      const generic = { message: 'If an account exists, a sign-in link has been sent.' };
+
+      const user = await prisma.user.findUnique({ where: { email } });
+      if (!user?.isActive) {
+        res.json(generic);
+        return;
+      }
+
+      let orgId: string | null = null;
+      if (orgSlug) {
+        const org = await prisma.organization.findUnique({ where: { slug: orgSlug } });
+        if (org) {
+          const mem = await prisma.membership.findUnique({
+            where: { userId_organizationId: { userId: user.id, organizationId: org.id } },
+          });
+          if (mem?.isActive) orgId = org.id;
+        }
+      } else {
+        const first = await prisma.membership.findFirst({
+          where: { userId: user.id, isActive: true },
+          orderBy: { createdAt: 'asc' },
+        });
+        orgId = first?.organizationId ?? null;
+      }
+
+      const { createMagicLoginToken, magicLinkUrl, getOrgEmailBrand } = await import('../core/auth/magicLink');
+      const token = await createMagicLoginToken({ userId: user.id, orgId, redirectPath });
+      const loginUrl = magicLinkUrl(token);
+      const brand = await getOrgEmailBrand(orgId, 'default');
+      const { sendEmailQueued, emailTemplates } = await import('../core/email');
+      const tpl = emailTemplates.magicLinkLogin(
+        user.name?.trim() || user.email,
+        loginUrl,
+        15,
+        brand
+      );
+      await sendEmailQueued({
+        to: user.email,
+        subject: tpl.subject,
+        html: tpl.html,
+        priority: 'high',
+      });
+
+      res.json(generic);
+    } catch (error) {
+      console.error('Magic link send error:', error);
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  }
+);
+
+// POST /api/auth/magic-link/verify — exchange token for JWT
+router.post('/magic-link/verify', authRateLimiter, async (req: Request, res: Response) => {
+  try {
+    const token = String(req.body.token || '').trim();
+    if (!token) {
+      res.status(400).json({ error: 'Token is required' });
+      return;
+    }
+
+    const { consumeMagicLoginToken } = await import('../core/auth/magicLink');
+    const consumed = await consumeMagicLoginToken(token);
+    if (!consumed) {
+      res.status(400).json({ error: 'Invalid or expired link' });
+      return;
+    }
+
+    const user = await prisma.user.findUnique({ where: { id: consumed.userId } });
+    if (!user?.isActive) {
+      res.status(400).json({ error: 'Invalid or expired link' });
+      return;
+    }
+
+    let orgId = consumed.orgId;
+    if (!orgId) {
+      const first = await prisma.membership.findFirst({
+        where: { userId: user.id, isActive: true },
+        orderBy: { createdAt: 'asc' },
+      });
+      orgId = first?.organizationId ?? null;
+    }
+
+    if (!orgId) {
+      res.status(400).json({ error: 'No organization access' });
+      return;
+    }
+
+    const org = await prisma.organization.findUnique({ where: { id: orgId } });
+    if (!org?.isActive || org.status !== 'active') {
+      res.status(403).json({ error: 'Organization not available' });
+      return;
+    }
+
+    const accessToken = createAuthToken(user, orgId);
+    const response = {
+      accessToken,
+      user: {
+        id: user.id,
+        email: user.email,
+        name: user.name,
+        isSuperAdmin: user.isSuperAdmin,
+      },
+      organization: { id: org.id, name: org.name, slug: org.slug },
+      redirectPath: consumed.redirectPath ?? undefined,
+    } as AuthResponse & { redirectPath?: string };
+    res.json(response);
+  } catch (error) {
+    console.error('Magic link verify error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 // POST /api/auth/switch-organization - Switch to a different organization
 router.post('/switch-organization', authRateLimiter, async (req: Request, res: Response) => {
   try {

@@ -86,8 +86,17 @@ class EmailQueue {
         text: email.text,
         from: email.from,
       });
+      const { recordEmailQueueMetric } = await import('../monitoring/opsMetrics');
+      recordEmailQueueMetric({ status: 'sent', to: email.to, subject: email.subject });
     } catch (error: any) {
       console.error(`Error sending email ${email.id}:`, error);
+      const { recordEmailQueueMetric } = await import('../monitoring/opsMetrics');
+      recordEmailQueueMetric({
+        status: email.attempts + 1 >= email.maxAttempts ? 'failed' : 'retry',
+        to: email.to,
+        subject: email.subject,
+        error: error?.message,
+      });
       
       // Retry if attempts < maxAttempts
       if (email.attempts < email.maxAttempts) {

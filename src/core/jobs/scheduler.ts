@@ -7,6 +7,7 @@ import { checkAndProcessTrials } from './trial-expiry';
 import { checkModuleAccessExpiry } from './module-access-expiry';
 import { checkTicketingSlaAlerts } from './ticketing-sla';
 import { runMembershipMaintenanceJobs } from './membership-expiry';
+import { runPmoBudgetAlertJobs } from './pmo-budget-alerts';
 import { captureMessage } from '../errorTracking';
 
 let isRunning = false;
@@ -101,6 +102,17 @@ export function startScheduledJobs(): void {
     } catch (error: any) {
       console.error('Error in membership maintenance job:', error);
       captureMessage(`Membership maintenance job failed: ${error.message}`, 'error');
+    }
+  });
+
+  // PMO budget alerts daily at 5 AM
+  cron.schedule('0 5 * * *', async () => {
+    try {
+      const result = await runPmoBudgetAlertJobs();
+      console.log(`PMO budget alerts: ${result.alerted} projects alerted`);
+    } catch (error: any) {
+      console.error('Error in PMO budget alert job:', error);
+      captureMessage(`PMO budget alert job failed: ${error.message}`, 'error');
     }
   });
 
