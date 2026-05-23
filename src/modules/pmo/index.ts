@@ -7,6 +7,12 @@ import { moduleRegistry } from '../../core/modules/registry';
 import { hashPassword } from '../../core/auth/password';
 import type { ModuleManifest } from '@cloud-org/shared';
 import tasksRouter from './tasks';
+import {
+  buildProjectDetailInclude,
+  getProjectListWhere,
+  getUserPermissionKeys,
+  requireProjectAccess,
+} from './project-access';
 
 const router = Router();
 
@@ -51,6 +57,11 @@ export const pmoManifest: ModuleManifest = {
       label: 'Clients',
       permission: 'pmo.client_managers.view',
     },
+    {
+      path: '/pmo/tasks',
+      label: 'Tasks',
+      permission: 'pmo.tasks.view',
+    },
   ],
   dashboardWidgets: [
     {
@@ -90,39 +101,14 @@ router.get('/projects', requirePermission('pmo.projects.view'), async (req, res)
       return;
     }
 
-    const where: { orgId: string; id?: { in: string[] } } = { orgId: req.org.id };
-
-    // If user is client-only (no edit permission), restrict to projects where they are ClientProjectManager
-    if (!req.user.isSuperAdmin) {
-      const membership = await prisma.membership.findUnique({
-        where: {
-          userId_organizationId: { userId: req.user.id, organizationId: req.org.id },
-        },
-        include: {
-          membershipRoles: {
-            include: {
-              role: { include: { rolePermissions: { include: { permission: true } } } },
-            },
-          },
-        },
-      });
-      const hasEdit = membership?.membershipRoles?.some((mr) =>
-        mr.role.rolePermissions.some((rp) => rp.permission.key === 'pmo.projects.edit' || rp.permission.key === 'pmo.tasks.edit')
-      );
-      if (!hasEdit) {
-        const cpmProjects = await prisma.clientProjectManager.findMany({
-          where: { userId: req.user.id, isActive: true },
-          select: { projectId: true },
-        });
-        const projectIds = cpmProjects.map((c) => c.projectId);
-        if (projectIds.length > 0) {
-          where.id = { in: projectIds };
-        } else {
-          // Client user with no assigned projects → return empty
-          res.json([]);
-          return;
-        }
-      }
+    const where = await getProjectListWhere(req);
+    if (!where) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+    if (where.id?.in && where.id.in.length === 0) {
+      res.json([]);
+      return;
     }
 
     const projects = await prisma.project.findMany({
@@ -181,78 +167,19 @@ router.get('/projects/:id', requirePermission('pmo.projects.view'), async (req, 
 
     const { id } = req.params;
 
+    const accessResult = await requireProjectAccess(req, res, id);
+    if (!accessResult) return;
+
+    const permKeys = await getUserPermissionKeys(req);
+    const include = buildProjectDetailInclude(accessResult.access, permKeys);
+
     const project = await prisma.project.findFirst({
       where: {
         id,
         orgId: req.org.id,
       },
-      include: {
-        projectManagers: {
-          include: {
-            employee: {
-              select: {
-                id: true,
-                fullName: true,
-                email: true,
-                position: true,
-                department: true,
-              },
-            },
-          },
-        },
-        clientProjectManagers: {
-          include: {
-            user: {
-              select: {
-                id: true,
-                email: true,
-                name: true,
-              },
-            },
-          },
-        },
-        deliverables: {
-          orderBy: {
-            createdAt: 'desc',
-          },
-        },
-        budgets: {
-          orderBy: {
-            createdAt: 'desc',
-          },
-        },
-        risks: {
-          orderBy: {
-            createdAt: 'desc',
-          },
-        },
-        issues: {
-          orderBy: {
-            createdAt: 'desc',
-          },
-        },
-        milestones: {
-          orderBy: {
-            targetDate: 'asc',
-          },
-        },
-        documents: {
-          include: {
-            file: true,
-          },
-          orderBy: {
-            createdAt: 'desc',
-          },
-        },
-        clientContacts: true,
-        projectClients: {
-          include: {
-            _count: {
-              select: { clientProjectManagers: true, clientContacts: true },
-            },
-          },
-        },
-      },
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      include: include as any,
     });
 
     if (!project) {
@@ -260,7 +187,7 @@ router.get('/projects/:id', requirePermission('pmo.projects.view'), async (req, 
       return;
     }
 
-    res.json(project);
+    res.json({ ...project, access: accessResult.access });
   } catch (error) {
     console.error('Error fetching project:', error);
     res.status(500).json({ error: 'Internal server error' });
@@ -389,17 +316,7 @@ router.put('/projects/:id', requirePermission('pmo.projects.edit'), async (req, 
       notes,
     } = req.body;
 
-    const project = await prisma.project.findFirst({
-      where: {
-        id,
-        orgId: req.org.id,
-      },
-    });
-
-    if (!project) {
-      res.status(404).json({ error: 'Project not found' });
-      return;
-    }
+    if (!(await requireProjectAccess(req, res, id))) return;
 
     const updated = await prisma.project.update({
       where: { id },
@@ -437,17 +354,7 @@ router.delete('/projects/:id', requirePermission('pmo.projects.delete'), async (
 
     const { id } = req.params;
 
-    const project = await prisma.project.findFirst({
-      where: {
-        id,
-        orgId: req.org.id,
-      },
-    });
-
-    if (!project) {
-      res.status(404).json({ error: 'Project not found' });
-      return;
-    }
+    if (!(await requireProjectAccess(req, res, id))) return;
 
     await prisma.project.delete({
       where: { id },
@@ -476,17 +383,7 @@ router.post('/projects/:id/managers', requirePermission('pmo.projects.edit'), as
       return;
     }
 
-    const project = await prisma.project.findFirst({
-      where: {
-        id,
-        orgId: req.org.id,
-      },
-    });
-
-    if (!project) {
-      res.status(404).json({ error: 'Project not found' });
-      return;
-    }
+    if (!(await requireProjectAccess(req, res, id))) return;
 
     // Verify employee belongs to organization
     const employee = await prisma.employee.findFirst({
@@ -550,17 +447,7 @@ router.delete('/projects/:id/managers/:managerId', requirePermission('pmo.projec
 
     const { id, managerId } = req.params;
 
-    const project = await prisma.project.findFirst({
-      where: {
-        id,
-        orgId: req.org.id,
-      },
-    });
-
-    if (!project) {
-      res.status(404).json({ error: 'Project not found' });
-      return;
-    }
+    if (!(await requireProjectAccess(req, res, id))) return;
 
     await prisma.projectManager.delete({
       where: { id: managerId },
@@ -593,17 +480,7 @@ router.post('/projects/:id/client-managers', requirePermission('pmo.client_manag
       return;
     }
 
-    const project = await prisma.project.findFirst({
-      where: {
-        id,
-        orgId: req.org.id,
-      },
-    });
-
-    if (!project) {
-      res.status(404).json({ error: 'Project not found' });
-      return;
-    }
+    if (!(await requireProjectAccess(req, res, id))) return;
 
     // Check user limit
     const organization = await prisma.organization.findUnique({
@@ -770,17 +647,7 @@ router.get('/projects/:id/client-managers', requirePermission('pmo.client_manage
 
     const { id } = req.params;
 
-    const project = await prisma.project.findFirst({
-      where: {
-        id,
-        orgId: req.org.id,
-      },
-    });
-
-    if (!project) {
-      res.status(404).json({ error: 'Project not found' });
-      return;
-    }
+    if (!(await requireProjectAccess(req, res, id))) return;
 
     const clientManagers = await prisma.clientProjectManager.findMany({
       where: {
@@ -814,17 +681,7 @@ router.delete('/projects/:id/client-managers/:managerId', requirePermission('pmo
 
     const { id, managerId } = req.params;
 
-    const project = await prisma.project.findFirst({
-      where: {
-        id,
-        orgId: req.org.id,
-      },
-    });
-
-    if (!project) {
-      res.status(404).json({ error: 'Project not found' });
-      return;
-    }
+    if (!(await requireProjectAccess(req, res, id))) return;
 
     await prisma.clientProjectManager.delete({
       where: { id: managerId },
@@ -851,14 +708,7 @@ router.get('/projects/:id/clients', requirePermission('pmo.client_managers.view'
 
     const { id } = req.params;
 
-    const project = await prisma.project.findFirst({
-      where: { id, orgId: req.org.id },
-    });
-
-    if (!project) {
-      res.status(404).json({ error: 'Project not found' });
-      return;
-    }
+    if (!(await requireProjectAccess(req, res, id))) return;
 
     const clients = await prisma.projectClient.findMany({
       where: { projectId: id },
@@ -891,14 +741,7 @@ router.post('/projects/:id/clients', requirePermission('pmo.client_managers.crea
       return;
     }
 
-    const project = await prisma.project.findFirst({
-      where: { id, orgId: req.org.id },
-    });
-
-    if (!project) {
-      res.status(404).json({ error: 'Project not found' });
-      return;
-    }
+    if (!(await requireProjectAccess(req, res, id))) return;
 
     const client = await prisma.projectClient.create({
       data: {
@@ -927,14 +770,7 @@ router.put('/projects/:id/clients/:clientId', requirePermission('pmo.client_mana
     const { id, clientId } = req.params;
     const { name, website, imageUrl } = req.body;
 
-    const project = await prisma.project.findFirst({
-      where: { id, orgId: req.org.id },
-    });
-
-    if (!project) {
-      res.status(404).json({ error: 'Project not found' });
-      return;
-    }
+    if (!(await requireProjectAccess(req, res, id))) return;
 
     const existing = await prisma.projectClient.findFirst({
       where: { id: clientId, projectId: id },
@@ -971,14 +807,7 @@ router.delete('/projects/:id/clients/:clientId', requirePermission('pmo.client_m
 
     const { id, clientId } = req.params;
 
-    const project = await prisma.project.findFirst({
-      where: { id, orgId: req.org.id },
-    });
-
-    if (!project) {
-      res.status(404).json({ error: 'Project not found' });
-      return;
-    }
+    if (!(await requireProjectAccess(req, res, id))) return;
 
     const existing = await prisma.projectClient.findFirst({
       where: { id: clientId, projectId: id },
@@ -1014,17 +843,7 @@ router.get('/projects/:id/client-contacts', requirePermission('pmo.client_manage
 
     const { id } = req.params;
 
-    const project = await prisma.project.findFirst({
-      where: {
-        id,
-        orgId: req.org.id,
-      },
-    });
-
-    if (!project) {
-      res.status(404).json({ error: 'Project not found' });
-      return;
-    }
+    if (!(await requireProjectAccess(req, res, id))) return;
 
     const contacts = await prisma.projectClientContact.findMany({
       where: { projectId: id },
@@ -1054,19 +873,14 @@ router.post('/projects/:id/client-contacts', requirePermission('pmo.client_manag
       return;
     }
 
-    const project = await prisma.project.findFirst({
-      where: {
-        id,
-        orgId: req.org.id,
-      },
+    if (!(await requireProjectAccess(req, res, id))) return;
+
+    const projectRow = await prisma.project.findFirst({
+      where: { id, orgId: req.org.id },
+      select: { clientName: true },
     });
 
-    if (!project) {
-      res.status(404).json({ error: 'Project not found' });
-      return;
-    }
-
-    let companyVal = company || project.clientName || null;
+    let companyVal = company || projectRow?.clientName || null;
     if (projectClientId) {
       const pc = await prisma.projectClient.findFirst({
         where: { id: projectClientId, projectId: id },
@@ -1103,17 +917,7 @@ router.delete('/projects/:id/client-contacts/:contactId', requirePermission('pmo
 
     const { id, contactId } = req.params;
 
-    const project = await prisma.project.findFirst({
-      where: {
-        id,
-        orgId: req.org.id,
-      },
-    });
-
-    if (!project) {
-      res.status(404).json({ error: 'Project not found' });
-      return;
-    }
+    if (!(await requireProjectAccess(req, res, id))) return;
 
     await prisma.projectClientContact.delete({
       where: { id: contactId },
@@ -1140,17 +944,7 @@ router.get('/projects/:id/deliverables', requirePermission('pmo.deliverables.vie
 
     const { id } = req.params;
 
-    const project = await prisma.project.findFirst({
-      where: {
-        id,
-        orgId: req.org.id,
-      },
-    });
-
-    if (!project) {
-      res.status(404).json({ error: 'Project not found' });
-      return;
-    }
+    if (!(await requireProjectAccess(req, res, id))) return;
 
     const deliverables = await prisma.deliverable.findMany({
       where: {
@@ -1184,17 +978,7 @@ router.post('/projects/:id/deliverables', requirePermission('pmo.deliverables.cr
       return;
     }
 
-    const project = await prisma.project.findFirst({
-      where: {
-        id,
-        orgId: req.org.id,
-      },
-    });
-
-    if (!project) {
-      res.status(404).json({ error: 'Project not found' });
-      return;
-    }
+    if (!(await requireProjectAccess(req, res, id))) return;
 
     const deliverable = await prisma.deliverable.create({
       data: {
@@ -1309,28 +1093,19 @@ router.get('/projects/:id/budget', requirePermission('pmo.budget.view'), async (
 
     const { id } = req.params;
 
-    const project = await prisma.project.findFirst({
-      where: {
-        id,
-        orgId: req.org.id,
-      },
-    });
+    if (!(await requireProjectAccess(req, res, id))) return;
 
-    if (!project) {
-      res.status(404).json({ error: 'Project not found' });
-      return;
-    }
+    const [budgets, projectRow] = await Promise.all([
+      prisma.budget.findMany({
+        where: { projectId: id },
+        orderBy: { createdAt: 'desc' },
+      }),
+      prisma.project.findFirst({
+        where: { id, orgId: req.org.id },
+        select: { currency: true },
+      }),
+    ]);
 
-    const budgets = await prisma.budget.findMany({
-      where: {
-        projectId: id,
-      },
-      orderBy: {
-        createdAt: 'desc',
-      },
-    });
-
-    // Calculate totals
     const totalBudgeted = budgets.reduce((sum, b) => sum + b.budgetedCents, 0);
     const totalSpent = budgets.reduce((sum, b) => sum + b.spentCents, 0);
 
@@ -1340,7 +1115,7 @@ router.get('/projects/:id/budget', requirePermission('pmo.budget.view'), async (
         budgetedCents: totalBudgeted,
         spentCents: totalSpent,
         remainingCents: totalBudgeted - totalSpent,
-        currency: project.currency,
+        currency: projectRow?.currency ?? 'SAR',
       },
     });
   } catch (error) {
@@ -1365,17 +1140,7 @@ router.post('/projects/:id/budget', requirePermission('pmo.budget.create'), asyn
       return;
     }
 
-    const project = await prisma.project.findFirst({
-      where: {
-        id,
-        orgId: req.org.id,
-      },
-    });
-
-    if (!project) {
-      res.status(404).json({ error: 'Project not found' });
-      return;
-    }
+    if (!(await requireProjectAccess(req, res, id))) return;
 
     const budget = await prisma.budget.create({
       data: {
@@ -1484,17 +1249,7 @@ router.get('/projects/:id/risks', requirePermission('pmo.risks.view'), async (re
 
     const { id } = req.params;
 
-    const project = await prisma.project.findFirst({
-      where: {
-        id,
-        orgId: req.org.id,
-      },
-    });
-
-    if (!project) {
-      res.status(404).json({ error: 'Project not found' });
-      return;
-    }
+    if (!(await requireProjectAccess(req, res, id))) return;
 
     const risks = await prisma.risk.findMany({
       where: {
@@ -1539,17 +1294,7 @@ router.post('/projects/:id/risks', requirePermission('pmo.risks.create'), async 
       return;
     }
 
-    const project = await prisma.project.findFirst({
-      where: {
-        id,
-        orgId: req.org.id,
-      },
-    });
-
-    if (!project) {
-      res.status(404).json({ error: 'Project not found' });
-      return;
-    }
+    if (!(await requireProjectAccess(req, res, id))) return;
 
     const risk = await prisma.risk.create({
       data: {
@@ -1682,17 +1427,7 @@ router.get('/projects/:id/issues', requirePermission('pmo.issues.view'), async (
 
     const { id } = req.params;
 
-    const project = await prisma.project.findFirst({
-      where: {
-        id,
-        orgId: req.org.id,
-      },
-    });
-
-    if (!project) {
-      res.status(404).json({ error: 'Project not found' });
-      return;
-    }
+    if (!(await requireProjectAccess(req, res, id))) return;
 
     const issues = await prisma.issue.findMany({
       where: {
@@ -1726,17 +1461,7 @@ router.post('/projects/:id/issues', requirePermission('pmo.issues.create'), asyn
       return;
     }
 
-    const project = await prisma.project.findFirst({
-      where: {
-        id,
-        orgId: req.org.id,
-      },
-    });
-
-    if (!project) {
-      res.status(404).json({ error: 'Project not found' });
-      return;
-    }
+    if (!(await requireProjectAccess(req, res, id))) return;
 
     const issue = await prisma.issue.create({
       data: {
@@ -1865,14 +1590,7 @@ router.get('/projects/:id/milestones', requirePermission('pmo.projects.view'), a
 
     const { id } = req.params;
 
-    const project = await prisma.project.findFirst({
-      where: { id, orgId: req.org.id },
-    });
-
-    if (!project) {
-      res.status(404).json({ error: 'Project not found' });
-      return;
-    }
+    if (!(await requireProjectAccess(req, res, id))) return;
 
     const milestones = await prisma.projectMilestone.findMany({
       where: { projectId: id },
@@ -1902,14 +1620,7 @@ router.post('/projects/:id/milestones', requirePermission('pmo.projects.edit'), 
       return;
     }
 
-    const project = await prisma.project.findFirst({
-      where: { id, orgId: req.org.id },
-    });
-
-    if (!project) {
-      res.status(404).json({ error: 'Project not found' });
-      return;
-    }
+    if (!(await requireProjectAccess(req, res, id))) return;
 
     const milestone = await prisma.projectMilestone.create({
       data: {
@@ -2001,13 +1712,183 @@ router.delete('/milestones/:id', requirePermission('pmo.projects.edit'), async (
 });
 
 // ============================================
+// PROJECT DOCUMENTS
+// ============================================
+
+// GET /api/pmo/projects/:id/documents
+router.get('/projects/:id/documents', requirePermission('pmo.projects.view'), async (req, res) => {
+  try {
+    if (!req.org) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+
+    const { id } = req.params;
+    const accessResult = await requireProjectAccess(req, res, id);
+    if (!accessResult) return;
+
+    const documents = await prisma.projectDocument.findMany({
+      where: { projectId: id },
+      include: { file: true },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    res.json(documents);
+  } catch (error) {
+    console.error('Error fetching project documents:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// POST /api/pmo/projects/:id/documents
+router.post('/projects/:id/documents', requirePermission('pmo.projects.view'), async (req, res) => {
+  try {
+    if (!req.org) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+
+    const { id } = req.params;
+    const { fileId, category, title, notes } = req.body;
+
+    if (!fileId) {
+      res.status(400).json({ error: 'fileId is required' });
+      return;
+    }
+
+    const accessResult = await requireProjectAccess(req, res, id);
+    if (!accessResult) return;
+
+    if (accessResult.access === 'org') {
+      const permKeys = await getUserPermissionKeys(req);
+      if (!permKeys.has('*') && !permKeys.has('pmo.projects.edit')) {
+        res.status(403).json({ error: 'Forbidden' });
+        return;
+      }
+    }
+
+    const file = await prisma.file.findFirst({
+      where: { id: fileId, organizationId: req.org.id },
+    });
+    if (!file) {
+      res.status(404).json({ error: 'File not found' });
+      return;
+    }
+
+    const doc = await prisma.projectDocument.create({
+      data: {
+        projectId: id,
+        fileId,
+        category: category || null,
+        title: title || file.originalName,
+        notes: notes || null,
+      },
+      include: { file: true },
+    });
+
+    res.status(201).json(doc);
+  } catch (error) {
+    console.error('Error creating project document:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// PUT /api/pmo/projects/:id/documents/:docId
+router.put('/projects/:id/documents/:docId', requirePermission('pmo.projects.edit'), async (req, res) => {
+  try {
+    if (!req.org) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+
+    const { id, docId } = req.params;
+    const accessResult = await requireProjectAccess(req, res, id);
+    if (!accessResult) return;
+    if (accessResult.access === 'client') {
+      res.status(403).json({ error: 'Forbidden' });
+      return;
+    }
+
+    const { category, title, notes } = req.body;
+    const existing = await prisma.projectDocument.findFirst({
+      where: { id: docId, projectId: id },
+    });
+    if (!existing) {
+      res.status(404).json({ error: 'Document not found' });
+      return;
+    }
+
+    const updated = await prisma.projectDocument.update({
+      where: { id: docId },
+      data: {
+        ...(category !== undefined && { category }),
+        ...(title !== undefined && { title }),
+        ...(notes !== undefined && { notes }),
+      },
+      include: { file: true },
+    });
+
+    res.json(updated);
+  } catch (error) {
+    console.error('Error updating project document:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// DELETE /api/pmo/projects/:id/documents/:docId
+router.delete('/projects/:id/documents/:docId', requirePermission('pmo.projects.edit'), async (req, res) => {
+  try {
+    if (!req.org) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+
+    const { id, docId } = req.params;
+    const accessResult = await requireProjectAccess(req, res, id);
+    if (!accessResult) return;
+    if (accessResult.access === 'client') {
+      res.status(403).json({ error: 'Forbidden' });
+      return;
+    }
+
+    const existing = await prisma.projectDocument.findFirst({
+      where: { id: docId, projectId: id },
+      include: { file: true },
+    });
+    if (!existing) {
+      res.status(404).json({ error: 'Document not found' });
+      return;
+    }
+
+    await prisma.projectDocument.delete({ where: { id: docId } });
+
+    if (existing.file.storageKey) {
+      const { storageService } = await import('../../core/storage');
+      await storageService.deleteFile(existing.file.storageKey, existing.file.storageType);
+      await prisma.file.delete({ where: { id: existing.fileId } }).catch(() => undefined);
+    }
+
+    res.json({ message: 'Document deleted successfully' });
+  } catch (error) {
+    console.error('Error deleting project document:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// ============================================
 // WIDGETS
 // ============================================
 
 // GET /api/pmo/widgets/project-count
 router.get('/widgets/project-count', requirePermission('pmo.projects.view'), async (req, res) => {
   try {
-    if (!req.org) {
+    if (!req.org || !req.user) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+
+    const listWhere = await getProjectListWhere(req);
+    if (!listWhere) {
       res.status(401).json({ error: 'Unauthorized' });
       return;
     }
@@ -2015,6 +1896,7 @@ router.get('/widgets/project-count', requirePermission('pmo.projects.view'), asy
     const count = await prisma.project.count({
       where: {
         orgId: req.org.id,
+        ...(listWhere.id ? { id: listWhere.id } : {}),
         status: {
           in: ['planning', 'active'],
         },

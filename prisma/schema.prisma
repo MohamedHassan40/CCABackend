@@ -242,7 +242,7 @@ model RolePermission {
 
 model Module {
   id          String  @id @default(cuid())
-  key         String  @unique // "hr", "ticketing", "inventory", etc.
+  key         String  @unique // "hr", "ticketing", "marketplace", etc.
   name        String
   description String?
   isActive    Boolean @default(true)
@@ -1184,7 +1184,7 @@ model File {
 }
 
 // ============================================
-// INVENTORY MODULE
+// HR EMPLOYEE ASSETS (laptops, uniforms, equipment)
 // ============================================
 
 model InventoryItem {

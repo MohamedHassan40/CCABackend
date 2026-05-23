@@ -3,7 +3,7 @@ import multer from 'multer';
 import { storageService } from '../core/storage';
 import prisma from '../core/db';
 import { authMiddleware } from '../middleware/auth';
-import { canUserAccessProjectTask } from '../modules/pmo/project-access';
+import { canUserAccessProject, canUserAccessProjectTask } from '../modules/pmo/project-access';
 
 const router = Router();
 
@@ -53,7 +53,7 @@ router.post('/upload', upload.single('file'), async (req: Request, res: Response
       return;
     }
 
-    const { entityType, entityId, ticketId, folder, employeeId } = req.body;
+    const { entityType, entityId, ticketId, folder, employeeId, projectId } = req.body;
 
     // If ticketId provided, verify ticket exists and belongs to org (for ticket attachments)
     if (ticketId) {
@@ -77,10 +77,29 @@ router.post('/upload', upload.single('file'), async (req: Request, res: Response
       }
     }
 
+    // PMO project file upload (before linking as ProjectDocument)
+    if (projectId) {
+      const hasAccess = await canUserAccessProject(
+        req.user!.id,
+        req.org.id,
+        String(projectId),
+        !!req.user!.isSuperAdmin
+      );
+      if (!hasAccess) {
+        res.status(404).json({ error: 'Project not found' });
+        return;
+      }
+    }
+
     // If entityType is project_task, verify task exists and user has access
     if (entityType === 'project_task' && entityId) {
       const taskId = String(entityId);
-      const hasAccess = await canUserAccessProjectTask(req.user!.id, req.org.id, taskId);
+      const hasAccess = await canUserAccessProjectTask(
+        req.user!.id,
+        req.org.id,
+        taskId,
+        !!req.user!.isSuperAdmin
+      );
       if (!hasAccess) {
         res.status(404).json({ error: 'Task not found' });
         return;

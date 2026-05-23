@@ -30,7 +30,6 @@ async function runTests(): Promise<void> {
     { name: 'Ticketing Module', path: 'tests/modules/ticketing.test.ts' },
     { name: 'Billing Module', path: 'tests/modules/billing.test.ts' },
     { name: 'Marketplace Module', path: 'tests/modules/marketplace.test.ts' },
-    { name: 'Inventory Module', path: 'tests/modules/inventory.test.ts' },
     { name: 'Permissions', path: 'tests/unit/permissions.test.ts' },
   ];
 

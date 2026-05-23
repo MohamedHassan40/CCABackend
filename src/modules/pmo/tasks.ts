@@ -1,9 +1,82 @@
 import { Router, Request, Response } from 'express';
 import prisma from '../../core/db';
 import { requirePermission } from '../../middleware/permissions';
-import { getProjectWithAccess, requireProjectAccess, type ProjectAccess } from './project-access';
+import {
+  getProjectListWhere,
+  getProjectWithAccess,
+  requireProjectAccess,
+  type ProjectAccess,
+} from './project-access';
 
 const router = Router();
+
+// GET /api/pmo/tasks — cross-project task list
+router.get('/tasks', requirePermission('pmo.tasks.view'), async (req: Request, res: Response) => {
+  try {
+    if (!req.user || !req.org) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+
+    const listWhere = await getProjectListWhere(req);
+    if (!listWhere) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+
+    const taskWhere: {
+      orgId: string;
+      projectId?: { in: string[] };
+      status?: string;
+    } = { orgId: req.org.id };
+
+    if (listWhere.id) {
+      if (listWhere.id.in.length === 0) {
+        res.json([]);
+        return;
+      }
+      taskWhere.projectId = { in: listWhere.id.in };
+    }
+
+    if (typeof req.query.status === 'string') {
+      taskWhere.status = req.query.status;
+    }
+
+    const tasks = await prisma.projectTask.findMany({
+      where: taskWhere,
+      include: {
+        project: { select: { id: true, name: true, status: true, clientName: true } },
+        createdBy: { select: { id: true, email: true, name: true } },
+        assignee: { select: { id: true, fullName: true, email: true } },
+        _count: { select: { comments: true, timeEntries: true } },
+      },
+      orderBy: { updatedAt: 'desc' },
+      take: 500,
+    });
+
+    const taskIds = tasks.map((t) => t.id);
+    const timeSums =
+      taskIds.length > 0
+        ? await prisma.projectTaskTimeEntry.groupBy({
+            by: ['projectTaskId'],
+            where: { projectTaskId: { in: taskIds } },
+            _sum: { minutes: true },
+          })
+        : [];
+    const minutesByTask: Record<string, number> = {};
+    for (const s of timeSums) minutesByTask[s.projectTaskId] = s._sum.minutes ?? 0;
+
+    res.json(
+      tasks.map((t) => ({
+        ...t,
+        totalMinutes: minutesByTask[t.id] ?? 0,
+      }))
+    );
+  } catch (error) {
+    console.error('Error fetching PMO tasks:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
 
 const taskInclude = {
   project: { select: { id: true, name: true, orgId: true, status: true, clientName: true } },

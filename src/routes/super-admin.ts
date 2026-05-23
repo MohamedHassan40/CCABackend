@@ -906,7 +906,6 @@ router.get('/modules/:moduleKey/organizations', async (req: Request, res: Respon
       ticketing: ['ticketing.'],
       hr: ['hr.'],
       marketplace: ['marketplace.'],
-      inventory: ['inventory.'],
     };
 
     const rolePrefixes = moduleRolePrefixes[moduleKey] || [`${moduleKey}.`];

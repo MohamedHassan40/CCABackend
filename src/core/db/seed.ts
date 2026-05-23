@@ -14,7 +14,8 @@ async function main() {
     create: {
       key: 'hr',
       name: 'HR & Employees',
-      description: 'Human resources and employee management including attendance, leave, payroll, recruitment, and performance reviews',
+      description:
+        'Human resources and employee management including attendance, leave, payroll, recruitment, performance reviews, and employee assets (laptops, uniforms, equipment)',
       isActive: true,
     },
   });
@@ -51,17 +52,6 @@ async function main() {
       key: 'marketplace',
       name: 'Marketplace',
       description: 'E-commerce marketplace with products, categories, and orders',
-      isActive: true,
-    },
-  });
-
-  const inventoryModule = await prisma.module.upsert({
-    where: { key: 'inventory' },
-    update: {},
-    create: {
-      key: 'inventory',
-      name: 'Inventory Management',
-      description: 'Inventory tracking, assignments, returns, damages, and swaps',
       isActive: true,
     },
   });
@@ -110,7 +100,23 @@ async function main() {
     },
   });
 
-  console.log('✅ Created 9 modules\n');
+  console.log('✅ Created 8 modules\n');
+
+  // Retire standalone inventory module (employee assets live under HR)
+  const legacyInventory = await prisma.module.findUnique({ where: { key: 'inventory' } });
+  if (legacyInventory) {
+    await prisma.orgModule.deleteMany({ where: { moduleId: legacyInventory.id } });
+    await prisma.bundleModule.deleteMany({ where: { moduleId: legacyInventory.id } });
+    await prisma.modulePrice.deleteMany({ where: { moduleId: legacyInventory.id } });
+    await prisma.subscription.deleteMany({ where: { moduleId: legacyInventory.id } });
+    await prisma.module.update({
+      where: { key: 'inventory' },
+      data: {
+        isActive: false,
+        description: 'Retired — employee assets are managed under the HR module',
+      },
+    });
+  }
 
   // ============================================
   // CREATE ROLES
@@ -225,26 +231,6 @@ async function main() {
       key: 'marketplace.viewer',
       name: 'Marketplace Viewer',
       description: 'Read-only access to marketplace',
-    },
-  });
-
-  const inventoryManagerRole = await prisma.role.upsert({
-    where: { key: 'inventory.manager' },
-    update: {},
-    create: {
-      key: 'inventory.manager',
-      name: 'Inventory Manager',
-      description: 'Full access to inventory',
-    },
-  });
-
-  const inventoryViewerRole = await prisma.role.upsert({
-    where: { key: 'inventory.viewer' },
-    update: {},
-    create: {
-      key: 'inventory.viewer',
-      name: 'Inventory Viewer',
-      description: 'Read-only access to inventory',
     },
   });
 
@@ -394,6 +380,26 @@ async function main() {
     { key: 'ticketing.tickets.delete', name: 'Delete Tickets' },
     // HR self-service (employee portal; no HR admin screens)
     { key: 'hr.self_service', name: 'HR Employee Self-Service' },
+    { key: 'hr.assets.view', name: 'View Employee Assets' },
+    { key: 'hr.assets.create', name: 'Create Employee Assets' },
+    { key: 'hr.assets.edit', name: 'Edit Employee Assets' },
+    { key: 'hr.assets.delete', name: 'Delete Employee Assets' },
+    { key: 'hr.assets.categories.view', name: 'View Asset Categories' },
+    { key: 'hr.assets.categories.create', name: 'Create Asset Categories' },
+    { key: 'hr.assets.categories.edit', name: 'Edit Asset Categories' },
+    { key: 'hr.assets.categories.delete', name: 'Delete Asset Categories' },
+    { key: 'hr.assets.assignments.view', name: 'View Asset Assignments' },
+    { key: 'hr.assets.assignments.create', name: 'Create Asset Assignments' },
+    { key: 'hr.assets.assignments.edit', name: 'Edit Asset Assignments' },
+    { key: 'hr.assets.assignments.approve', name: 'Approve Asset Assignments' },
+    { key: 'hr.assets.returns.view', name: 'View Asset Returns' },
+    { key: 'hr.assets.returns.create', name: 'Create Asset Returns' },
+    { key: 'hr.assets.damages.view', name: 'View Asset Damages' },
+    { key: 'hr.assets.damages.create', name: 'Create Asset Damage Records' },
+    { key: 'hr.assets.damages.review', name: 'Review Asset Damages' },
+    { key: 'hr.assets.swaps.view', name: 'View Asset Swaps' },
+    { key: 'hr.assets.swaps.create', name: 'Create Asset Swaps' },
+    { key: 'hr.assets.swaps.approve', name: 'Approve Asset Swaps' },
     // Platform subscriptions (CCA module licensing — not the org Billing module)
     { key: 'subscriptions.view', name: 'View Platform Subscriptions' },
     { key: 'subscriptions.manage', name: 'Manage Platform Subscriptions' },
@@ -411,27 +417,6 @@ async function main() {
     { key: 'marketplace.orders.view', name: 'View Orders' },
     { key: 'marketplace.orders.create', name: 'Create Orders' },
     { key: 'marketplace.orders.edit', name: 'Edit Orders' },
-    // Inventory permissions
-    { key: 'inventory.items.view', name: 'View Inventory Items' },
-    { key: 'inventory.items.create', name: 'Create Inventory Items' },
-    { key: 'inventory.items.edit', name: 'Edit Inventory Items' },
-    { key: 'inventory.items.delete', name: 'Delete Inventory Items' },
-    { key: 'inventory.categories.view', name: 'View Categories' },
-    { key: 'inventory.categories.create', name: 'Create Categories' },
-    { key: 'inventory.categories.edit', name: 'Edit Categories' },
-    { key: 'inventory.categories.delete', name: 'Delete Categories' },
-    { key: 'inventory.assignments.view', name: 'View Assignments' },
-    { key: 'inventory.assignments.create', name: 'Create Assignments' },
-    { key: 'inventory.assignments.edit', name: 'Edit Assignments' },
-    { key: 'inventory.assignments.approve', name: 'Approve Assignments' },
-    { key: 'inventory.returns.view', name: 'View Returns' },
-    { key: 'inventory.returns.create', name: 'Create Returns' },
-    { key: 'inventory.damages.view', name: 'View Damages' },
-    { key: 'inventory.damages.create', name: 'Create Damage Records' },
-    { key: 'inventory.damages.review', name: 'Review Damages' },
-    { key: 'inventory.swaps.view', name: 'View Swaps' },
-    { key: 'inventory.swaps.create', name: 'Create Swaps' },
-    { key: 'inventory.swaps.approve', name: 'Approve Swaps' },
     // PMO permissions
     { key: 'pmo.projects.view', name: 'View Projects' },
     { key: 'pmo.projects.create', name: 'Create Projects' },
@@ -588,7 +573,6 @@ async function main() {
   await assignModulePermissions(hrManagerRole, 'hr.');
   await assignModulePermissions(ticketingAgentRole, 'ticketing.');
   await assignModulePermissions(marketplaceManagerRole, 'marketplace.');
-  await assignModulePermissions(inventoryManagerRole, 'inventory.');
   await assignModulePermissions(pmoManagerRole, 'pmo.');
   await assignModulePermissions(documentsManagerRole, 'documents.');
   await assignModulePermissions(salesManagerRole, 'sales.');
@@ -665,14 +649,13 @@ async function main() {
     });
   }
 
-  // Marketplace, Inventory, PMO viewers
+  // Marketplace, PMO viewers
   const viewOnlyPerms = createdPermissions.filter((p) =>
-    (p.key.startsWith('marketplace.') || p.key.startsWith('inventory.') || p.key.startsWith('pmo.')) && p.key.endsWith('.view')
+    (p.key.startsWith('marketplace.') || p.key.startsWith('pmo.')) && p.key.endsWith('.view')
   );
   for (const perm of viewOnlyPerms) {
     let roleId = null;
     if (perm.key.startsWith('marketplace.')) roleId = marketplaceViewerRole.id;
-    if (perm.key.startsWith('inventory.')) roleId = inventoryViewerRole.id;
     if (perm.key.startsWith('pmo.')) roleId = pmoViewerRole.id;
 
     if (roleId) {
@@ -923,7 +906,6 @@ async function main() {
   await seedModulePrices(hrModule, 9900, 99000, 19900, 199000); // HR: Pro 99/month, Ultra 199/month
   await seedModulePrices(ticketingModule, 14900, 149000, 29900, 299000); // Ticketing: Pro 149/month, Ultra 299/month
   await seedModulePrices(marketplaceModule, 19900, 199000, 39900, 399000); // Marketplace: Pro 199/month, Ultra 399/month
-  await seedModulePrices(inventoryModule, 14900, 149000, 29900, 299000); // Inventory: Pro 149/month, Ultra 299/month
   await seedModulePrices(pmoModule, 24900, 249000, 49900, 499000); // PMO: Pro 249/month, Ultra 499/month
   await seedModulePrices(documentsModule, 9900, 99000, 19900, 199000); // Documents: Pro 99/month, Ultra 199/month
   await seedModulePrices(salesModule, 19900, 199000, 39900, 399000); // Sales: Pro 199/month, Ultra 399/month
@@ -962,7 +944,7 @@ async function main() {
     ?? await prisma.bundle.create({
       data: {
         name: 'Business Bundle',
-        description: 'HR, Ticketing, Marketplace & Inventory. Complete business suite.',
+        description: 'HR, Ticketing, and Marketplace. Complete business suite.',
         priceCents: 49900, // 499 SAR/month
         currency: 'SAR',
         billingPeriod: 'monthly',
@@ -1007,11 +989,9 @@ async function main() {
     { bundle: businessBundle, module: hrModule, plan: 'pro' },
     { bundle: businessBundle, module: ticketingModule, plan: 'pro' },
     { bundle: businessBundle, module: marketplaceModule, plan: 'pro' },
-    { bundle: businessBundle, module: inventoryModule, plan: 'pro' },
     { bundle: enterpriseBundle, module: hrModule, plan: 'ultra' },
     { bundle: enterpriseBundle, module: ticketingModule, plan: 'ultra' },
     { bundle: enterpriseBundle, module: marketplaceModule, plan: 'ultra' },
-    { bundle: enterpriseBundle, module: inventoryModule, plan: 'ultra' },
     { bundle: enterpriseBundle, module: pmoModule, plan: 'ultra' },
     { bundle: enterpriseBundle, module: documentsModule, plan: 'ultra' },
     { bundle: enterpriseBundle, module: salesModule, plan: 'ultra' },
@@ -1115,7 +1095,6 @@ async function main() {
     hrModule,
     ticketingModule,
     marketplaceModule,
-    inventoryModule,
     pmoModule,
     documentsModule,
     salesModule,

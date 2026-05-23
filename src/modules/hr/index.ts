@@ -377,6 +377,11 @@ export const hrManifest: ModuleManifest = {
       label: 'Decisions',
       permission: 'hr.decisions.view',
     },
+    {
+      path: '/hr/assets',
+      label: 'Assets',
+      permission: 'hr.assets.view',
+    },
   ],
   dashboardWidgets: [
     {
