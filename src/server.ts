@@ -8,6 +8,7 @@ import meActivitiesRoutes from './routes/meActivities';
 import superAdminRoutes from './routes/super-admin';
 import organizationRoutes from './routes/organizations';
 import publicRoutes from './routes/public';
+import publicMembershipRoutes from './routes/publicMembership';
 import userRoutes from './routes/users';
 import notificationRoutes from './routes/notifications';
 import auditLogRoutes from './routes/audit-logs';
@@ -20,6 +21,7 @@ import { registerTicketingModule } from './modules/ticketing';
 import { registerBillingModule } from './modules/billing';
 import { registerSubscriptionsModule } from './modules/subscriptions';
 import { handleSubscriptionPaymentCallback } from './core/payments/subscription-payment-callback';
+import { handleMembershipPaymentCallback } from './core/payments/membership-payment-callback';
 import { registerMarketplaceModule } from './modules/marketplace';
 import { registerPmoModule } from './modules/pmo';
 import { registerDocumentsModule } from './modules/documents';
@@ -109,6 +111,7 @@ app.use('/api/super-admin', superAdminRoutes);
 app.use('/api/organizations', organizationRoutes);
 app.use('/api/onboarding', onboardingRoutes);
 app.use('/api/public', publicRoutes);
+app.use('/api/public/membership', publicMembershipRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/audit-logs', auditLogRoutes);
@@ -139,6 +142,7 @@ const subscriptionPaymentCallbackMiddleware = [
 // Payment callback webhook (no auth — Moyasar calls this). Legacy path kept for existing integrations.
 app.post('/api/billing/payment-callback', ...subscriptionPaymentCallbackMiddleware);
 app.post('/api/subscriptions/payment-callback', ...subscriptionPaymentCallbackMiddleware);
+app.post('/api/public/membership/payment-callback', ...subscriptionPaymentCallbackMiddleware, handleMembershipPaymentCallback);
 
 // Error handler with tracking and user-friendly messages (no raw DB/stack in response)
 app.use((err: Error, req: express.Request, res: express.Response, next: express.NextFunction) => {
