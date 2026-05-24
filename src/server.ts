@@ -1,6 +1,7 @@
 import express from 'express';
 import cors from 'cors';
-import { config } from './core/config';
+import { config, getCorsOriginsList } from './core/config';
+import { createCorsOptions } from './middleware/cors';
 import authRoutes from './routes/auth';
 import meRoutes from './routes/me';
 import meEmployeePortalRoutes from './routes/meEmployeePortal';
@@ -47,6 +48,12 @@ const app = express();
 // Trust first proxy hop so rate-limiter and req.ip work correctly.
 app.set('trust proxy', 1);
 
+// CORS first so preflight (OPTIONS) always gets Access-Control-* headers
+app.use(cors(createCorsOptions()));
+if (config.nodeEnv === 'production') {
+  console.info(`CORS allowed origins: ${getCorsOriginsList().join(', ')}`);
+}
+
 // Security middleware (apply before other middleware)
 if (config.nodeEnv === 'production') {
   app.use(helmetConfig);
@@ -58,12 +65,6 @@ if (config.nodeEnv === 'production') {
   app.use('/api', csrfProtection);
   app.use(setCsrfToken);
 }
-
-// Middleware
-app.use(cors({
-  origin: config.corsOrigin,
-  credentials: true,
-}));
 app.use(express.json());
 
 // Apply rate limiting to API routes

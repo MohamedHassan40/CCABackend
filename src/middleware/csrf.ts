@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import crypto from 'crypto';
 import { getCorsOriginsList } from '../core/config';
+import { normalizeOrigin } from './cors';
 
 // CSRF token generation and validation
 const CSRF_SECRET = process.env.CSRF_SECRET || crypto.randomBytes(32).toString('hex');
@@ -32,9 +33,22 @@ export function csrfProtection(req: Request, res: Response, next: NextFunction):
   const origin = req.headers.origin || req.headers.referer;
   const allowedOrigins = getCorsOriginsList();
 
-  if (origin && allowedOrigins.some((allowed) => allowed && origin.startsWith(allowed))) {
-    next();
-    return;
+  if (origin) {
+    const allowed = allowedOrigins.map((a) => normalizeOrigin(a)).filter(Boolean);
+    try {
+      const u = new URL(origin);
+      const requestOrigin = normalizeOrigin(`${u.protocol}//${u.host}`);
+      if (allowed.includes(requestOrigin)) {
+        next();
+        return;
+      }
+    } catch {
+      /* not a full URL — fall through to prefix check */
+    }
+    if (allowed.some((a) => origin.startsWith(a))) {
+      next();
+      return;
+    }
   }
 
   // If no origin check passes and no token, reject

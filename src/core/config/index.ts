@@ -1,6 +1,13 @@
+function normalizeOriginForConfig(origin: string): string {
+  return origin.trim().replace(/\/+$/, '');
+}
+
 function parseCorsOrigin(): string | string[] {
   const raw = process.env.CORS_ORIGIN || process.env.FRONTEND_URL || process.env.CLIENT_URL || 'http://localhost:3000';
-  return raw.includes(',') ? raw.split(',').map((o) => o.trim()).filter(Boolean) : raw;
+  const parts = raw.includes(',')
+    ? raw.split(',').map((o) => normalizeOriginForConfig(o)).filter(Boolean)
+    : [normalizeOriginForConfig(raw)];
+  return parts.length === 1 ? parts[0] : parts;
 }
 
 export const config = {

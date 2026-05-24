@@ -4,7 +4,7 @@
  */
 import express from 'express';
 import cors from 'cors';
-import { config } from './core/config';
+import { createCorsOptions } from './middleware/cors';
 import authRoutes from './routes/auth';
 import meRoutes from './routes/me';
 import meEmployeePortalRoutes from './routes/meEmployeePortal';
@@ -33,10 +33,7 @@ const app = express();
 app.use(securityHeaders);
 
 // Middleware
-app.use(cors({
-  origin: config.corsOrigin,
-  credentials: true,
-}));
+app.use(cors(createCorsOptions()));
 app.use(express.json());
 
 // Health check
