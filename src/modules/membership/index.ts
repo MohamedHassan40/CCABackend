@@ -14,14 +14,15 @@ import { normalizeMemberPhone } from './phone';
 import { parseImportedDate } from './importDates';
 import { addCalendarMonths } from '../../core/dates/membershipEndDate';
 import { isValidEmail } from '../../core/validation/email';
+import {
+  buildMembershipVerifyUrl,
+  ensureMembershipQrToken,
+  generateQrToken,
+} from '../../core/membership/qrVerify';
 
 const router = Router();
 
 const frontendUrl = () => process.env.FRONTEND_URL || process.env.CLIENT_URL || 'http://localhost:3000';
-
-function generateQrToken(): string {
-  return crypto.randomBytes(12).toString('base64url');
-}
 
 /** Display form: PREFIX-00001 or padded digits only when prefix is empty */
 function formatMembershipNumber(
@@ -1340,14 +1341,7 @@ router.get('/members/:id/card', requirePermission('membership.members.view'), as
     );
 
     // Ensure QR token exists (for members created before this feature)
-    let qrToken = membership.qrToken;
-    if (!qrToken) {
-      qrToken = generateQrToken();
-      await prisma.memberMembership.update({
-        where: { id: membership.id },
-        data: { qrToken },
-      });
-    }
+    const qrToken = await ensureMembershipQrToken(membership.id);
 
     let design =
       membership.membershipType.cardDesign ?? membership.cardDesign ?? null;
@@ -1407,7 +1401,7 @@ router.get('/members/:id/card', requirePermission('membership.members.view'), as
             customCss: null,
             fontFamily: 'sans-serif',
           },
-      verifyUrl: qrToken ? `${frontendUrl()}/membership/verify/${qrToken}` : null,
+      verifyUrl: buildMembershipVerifyUrl(qrToken),
     });
   } catch (error: any) {
     console.error('Error fetching membership card:', error);
@@ -1434,16 +1428,8 @@ router.get('/members/:id/qr', requirePermission('membership.members.view'), asyn
       return;
     }
 
-    let qrToken = membership.qrToken;
-    if (!qrToken) {
-      qrToken = generateQrToken();
-      await prisma.memberMembership.update({
-        where: { id: membership.id },
-        data: { qrToken },
-      });
-    }
-
-    const verifyUrl = `${frontendUrl()}/membership/verify/${qrToken}`;
+    const qrToken = await ensureMembershipQrToken(membership.id);
+    const verifyUrl = buildMembershipVerifyUrl(qrToken);
     const pngBuffer = await QRCode.toBuffer(verifyUrl, { type: 'png', width: 256, margin: 2 });
 
     res.set('Content-Type', 'image/png');

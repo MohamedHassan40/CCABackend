@@ -4,6 +4,7 @@ import { publicTicketRateLimiter } from '../middleware/security';
 import { createNotificationForOrgWithPermission } from '../core/notifications/helper';
 import { publicTicketUpload, verifyPublicTicketAccess } from '../core/ticketing/publicUpload';
 import { storageService } from '../core/storage';
+import { membershipVerifyReason } from '../core/membership/qrVerify';
 
 const router = Router();
 
@@ -645,9 +646,9 @@ router.post('/tickets/:orgSlug', publicTicketRateLimiter, async (req: Request, r
 // GET /api/public/membership/verify/:token - Verify membership by QR token (no auth)
 router.get('/membership/verify/:token', async (req: Request, res: Response) => {
   try {
-    const { token } = req.params;
+    const token = decodeURIComponent(String(req.params.token || '')).trim();
     if (!token) {
-      res.status(400).json({ valid: false, error: 'Token is required' });
+      res.status(400).json({ valid: false, reason: 'not_found', error: 'Token is required' });
       return;
     }
 
@@ -660,15 +661,16 @@ router.get('/membership/verify/:token', async (req: Request, res: Response) => {
     });
 
     if (!membership) {
-      res.status(404).json({ valid: false, error: 'Membership not found' });
+      res.status(404).json({ valid: false, reason: 'not_found', error: 'Membership not found' });
       return;
     }
 
-    const now = new Date();
-    const isActive = membership.status === 'active' && membership.endDate >= now;
+    const reason = membershipVerifyReason(membership);
+    const isActive = reason === 'active';
 
     res.json({
       valid: isActive,
+      reason,
       membership: {
         memberName: membership.memberName,
         memberEmail: membership.memberEmail,
@@ -681,7 +683,7 @@ router.get('/membership/verify/:token', async (req: Request, res: Response) => {
     });
   } catch (error) {
     console.error('Error verifying membership:', error);
-    res.status(500).json({ valid: false, error: 'Internal server error' });
+    res.status(500).json({ valid: false, reason: 'error', error: 'Internal server error' });
   }
 });
 

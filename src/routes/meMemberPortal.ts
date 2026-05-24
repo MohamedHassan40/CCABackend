@@ -1,11 +1,15 @@
 import { Router, Request, Response } from 'express';
-import crypto from 'crypto';
 import QRCode from 'qrcode';
 import prisma from '../core/db';
 import { authMiddleware } from '../middleware/auth';
 import { addCalendarMonths } from '../core/dates/membershipEndDate';
 import { findMemberRecordForUser, linkMemberRecordToUser } from '../core/membership/memberAccounts';
 import { getInvoiceCheckoutUrl, moyasarService } from '../core/payments/moyasar';
+import {
+  buildMembershipVerifyUrl,
+  ensureMembershipQrToken,
+  isMembershipActiveForVerification,
+} from '../core/membership/qrVerify';
 
 const router = Router();
 
@@ -17,10 +21,6 @@ function apiBaseUrl(): string {
   const base = process.env.API_URL || process.env.RAILWAY_PUBLIC_DOMAIN || 'http://localhost:3001';
   const withProto = base.startsWith('http') ? base : `https://${base}`;
   return withProto.replace(/\/$/, '');
-}
-
-function generateQrToken(): string {
-  return crypto.randomBytes(12).toString('base64url');
 }
 
 function formatMembershipNumber(
@@ -73,14 +73,7 @@ async function requireMemberAccess(req: Request, res: Response, orgSlug: string)
 }
 
 async function buildCardPayload(org: NonNullable<Awaited<ReturnType<typeof resolveOrgBySlug>>>, membership: any) {
-  let qrToken = membership.qrToken;
-  if (!qrToken) {
-    qrToken = generateQrToken();
-    await prisma.memberMembership.update({
-      where: { id: membership.id },
-      data: { qrToken },
-    });
-  }
+  const qrToken = await ensureMembershipQrToken(membership.id);
 
   let design =
     membership.membershipType?.cardDesign ?? membership.cardDesign ?? null;
@@ -114,7 +107,7 @@ async function buildCardPayload(org: NonNullable<Awaited<ReturnType<typeof resol
       paymentStatus: membership.paymentStatus,
       startDate: membership.startDate,
       endDate: membership.endDate,
-      isActive: membership.status === 'active' && membership.endDate >= now,
+      isActive: isMembershipActiveForVerification(membership),
       daysUntilExpiry,
       canRenew:
         membership.status === 'expired' ||
@@ -152,7 +145,7 @@ async function buildCardPayload(org: NonNullable<Awaited<ReturnType<typeof resol
           memberIdPrefix: null,
           fontFamily: 'sans-serif',
         },
-    verifyUrl: `${frontendUrl()}/membership/verify/${qrToken}`,
+    verifyUrl: buildMembershipVerifyUrl(qrToken),
   };
 }
 
@@ -299,15 +292,8 @@ router.get('/member-portal/:orgSlug/card/qr', authMiddleware, async (req: Reques
   try {
     const ctx = await requireMemberAccess(req, res, req.params.orgSlug);
     if (!ctx) return;
-    let qrToken = ctx.record.qrToken;
-    if (!qrToken) {
-      qrToken = generateQrToken();
-      await prisma.memberMembership.update({
-        where: { id: ctx.record.id },
-        data: { qrToken },
-      });
-    }
-    const verifyUrl = `${frontendUrl()}/membership/verify/${qrToken}`;
+    const qrToken = await ensureMembershipQrToken(ctx.record.id);
+    const verifyUrl = buildMembershipVerifyUrl(qrToken);
     const pngBuffer = await QRCode.toBuffer(verifyUrl, { type: 'png', width: 256, margin: 2 });
     res.set('Content-Type', 'image/png');
     res.send(pngBuffer);

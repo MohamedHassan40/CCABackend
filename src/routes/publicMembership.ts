@@ -1,5 +1,4 @@
 import { Router, Request, Response } from 'express';
-import crypto from 'crypto';
 import { Prisma } from '@prisma/client';
 import prisma from '../core/db';
 import { publicTicketRateLimiter } from '../middleware/security';
@@ -12,6 +11,7 @@ import {
   provisionMemberLoginAccount,
 } from '../core/membership/memberAccounts';
 import { sendMembershipRegisteredEmail } from '../core/membership/memberEmails';
+import { generateQrToken } from '../core/membership/qrVerify';
 
 const router = Router();
 
@@ -24,10 +24,6 @@ function apiBaseUrl(): string {
   const base = process.env.API_URL || process.env.RAILWAY_PUBLIC_DOMAIN || 'http://localhost:3001';
   const withProto = base.startsWith('http') ? base : `https://${base}`;
   return withProto.replace(/\/$/, '');
-}
-
-function generateQrToken(): string {
-  return crypto.randomBytes(12).toString('base64url');
 }
 
 function formatMembershipNumber(
