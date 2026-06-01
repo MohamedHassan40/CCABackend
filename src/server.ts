@@ -1,5 +1,6 @@
 import express from 'express';
 import cors from 'cors';
+import path from 'path';
 import { config, getCorsOriginsList } from './core/config';
 import { createCorsOptions } from './middleware/cors';
 import authRoutes from './routes/auth';
@@ -66,6 +67,10 @@ if (config.nodeEnv === 'production') {
   app.use(setCsrfToken);
 }
 app.use(express.json());
+
+// Local file uploads (logos, attachments stored on disk)
+const uploadDir = path.resolve(process.env.UPLOAD_DIR || path.join(process.cwd(), 'uploads'));
+app.use('/uploads', express.static(uploadDir, { maxAge: config.nodeEnv === 'production' ? '7d' : 0 }));
 
 // Apply rate limiting to API routes
 app.use('/api', apiRateLimiter);

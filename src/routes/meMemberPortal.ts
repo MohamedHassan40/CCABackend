@@ -131,6 +131,7 @@ async function buildCardPayload(org: NonNullable<Awaited<ReturnType<typeof resol
           showMemberId: design.showMemberId,
           memberIdPrefix: design.memberIdPrefix,
           fontFamily: design.fontFamily,
+          fontColor: design.fontColor,
         }
       : {
           name: 'Default',
@@ -144,6 +145,7 @@ async function buildCardPayload(org: NonNullable<Awaited<ReturnType<typeof resol
           showMemberId: true,
           memberIdPrefix: null,
           fontFamily: 'sans-serif',
+          fontColor: '#ffffff',
         },
     verifyUrl: buildMembershipVerifyUrl(qrToken),
   };

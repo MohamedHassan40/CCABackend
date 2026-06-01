@@ -382,6 +382,16 @@ export const hrManifest: ModuleManifest = {
       label: 'Assets',
       permission: 'hr.assets.view',
     },
+    {
+      path: '/hr/assets/categories',
+      label: 'Asset categories',
+      permission: 'hr.assets.categories.view',
+    },
+    {
+      path: '/hr/announcements',
+      label: 'Announcements',
+      permission: 'hr.announcements.view',
+    },
   ],
   dashboardWidgets: [
     {

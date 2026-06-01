@@ -527,7 +527,7 @@ router.post('/card-designs', requirePermission('membership.types.create'), async
       res.status(401).json({ error: 'Unauthorized' });
       return;
     }
-    const { name, isDefault, layout, primaryColor, secondaryColor, accentColor, logoUrl, showQR, qrPosition, showMemberId, memberIdPrefix, customCss, fontFamily } = req.body;
+    const { name, isDefault, layout, primaryColor, secondaryColor, accentColor, logoUrl, showQR, qrPosition, showMemberId, memberIdPrefix, customCss, fontFamily, fontColor } = req.body;
     if (!name) {
       res.status(400).json({ error: 'Name is required' });
       return;
@@ -554,6 +554,7 @@ router.post('/card-designs', requirePermission('membership.types.create'), async
         memberIdPrefix: memberIdPrefix || null,
         customCss: customCss || null,
         fontFamily: fontFamily || 'sans-serif',
+        fontColor: fontColor || '#ffffff',
       },
     });
     res.status(201).json(design);
@@ -578,7 +579,7 @@ router.put('/card-designs/:id', requirePermission('membership.types.edit'), asyn
       res.status(404).json({ error: 'Card design not found' });
       return;
     }
-    const { name, isDefault, layout, primaryColor, secondaryColor, accentColor, logoUrl, showQR, qrPosition, showMemberId, memberIdPrefix, customCss, fontFamily } = req.body;
+    const { name, isDefault, layout, primaryColor, secondaryColor, accentColor, logoUrl, showQR, qrPosition, showMemberId, memberIdPrefix, customCss, fontFamily, fontColor } = req.body;
     if (isDefault === true) {
       await prisma.membershipCardDesign.updateMany({
         where: { orgId: req.org.id },
@@ -601,6 +602,7 @@ router.put('/card-designs/:id', requirePermission('membership.types.edit'), asyn
         ...(memberIdPrefix !== undefined && { memberIdPrefix }),
         ...(customCss !== undefined && { customCss }),
         ...(fontFamily !== undefined && { fontFamily }),
+        ...(fontColor !== undefined && { fontColor }),
       },
     });
     res.json(updated);
@@ -1386,6 +1388,7 @@ router.get('/members/:id/card', requirePermission('membership.members.view'), as
             memberIdPrefix: design.memberIdPrefix,
             customCss: design.customCss,
             fontFamily: design.fontFamily,
+            fontColor: design.fontColor,
           }
         : {
             name: 'Default',
@@ -1400,6 +1403,7 @@ router.get('/members/:id/card', requirePermission('membership.members.view'), as
             memberIdPrefix: null,
             customCss: null,
             fontFamily: 'sans-serif',
+            fontColor: '#ffffff',
           },
       verifyUrl: buildMembershipVerifyUrl(qrToken),
     });

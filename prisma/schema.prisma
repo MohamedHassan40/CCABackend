@@ -2187,6 +2187,7 @@ model MembershipCardDesign {
   memberIdPrefix String?
   customCss   String? // Optional CSS overrides (sanitized on use)
   fontFamily  String?  @default("sans-serif") // e.g. "Inter", "sans-serif"
+  fontColor   String?  @default("#ffffff") // Text color on the card (hex)
 
   organization Organization       @relation(fields: [orgId], references: [id], onDelete: Cascade)
   memberships  MemberMembership[]

@@ -85,6 +85,240 @@ router.get('/', requirePermission('hr.assets.view'), async (req, res) => {
   }
 });
 
+// ============================================
+// ASSET CATEGORIES (must be registered before /:id)
+// ============================================
+
+// GET /api/hr/assets/categories
+router.get('/categories', requirePermission('hr.assets.categories.view'), async (req, res) => {
+  try {
+    if (!req.org) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+
+    const categories = await prisma.inventoryCategory.findMany({
+      where: {
+        orgId: req.org.id,
+      },
+      include: {
+        _count: {
+          select: {
+            items: true,
+          },
+        },
+      },
+      orderBy: {
+        name: 'asc',
+      },
+    });
+
+    res.json(categories);
+  } catch (error) {
+    console.error('Error fetching categories:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// POST /api/hr/assets/categories
+router.post('/categories', requirePermission('hr.assets.categories.create'), async (req, res) => {
+  try {
+    if (!req.org) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+
+    const { name, description } = req.body;
+
+    if (!name) {
+      res.status(400).json({ error: 'Name is required' });
+      return;
+    }
+
+    const existing = await prisma.inventoryCategory.findFirst({
+      where: {
+        orgId: req.org.id,
+        name,
+      },
+    });
+
+    if (existing) {
+      res.status(400).json({ error: 'Category with this name already exists' });
+      return;
+    }
+
+    const category = await prisma.inventoryCategory.create({
+      data: {
+        orgId: req.org.id,
+        name,
+        description: description || null,
+      },
+    });
+
+    res.status(201).json(category);
+  } catch (error) {
+    console.error('Error creating category:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// PUT /api/hr/assets/categories/:id
+router.put('/categories/:id', requirePermission('hr.assets.categories.edit'), async (req, res) => {
+  try {
+    if (!req.org) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+
+    const { id } = req.params;
+    const { name, description, isActive } = req.body;
+
+    const category = await prisma.inventoryCategory.findFirst({
+      where: {
+        id,
+        orgId: req.org.id,
+      },
+    });
+
+    if (!category) {
+      res.status(404).json({ error: 'Category not found' });
+      return;
+    }
+
+    if (name && name !== category.name) {
+      const existing = await prisma.inventoryCategory.findFirst({
+        where: {
+          orgId: req.org.id,
+          name,
+          id: { not: id },
+        },
+      });
+
+      if (existing) {
+        res.status(400).json({ error: 'Category with this name already exists' });
+        return;
+      }
+    }
+
+    const updated = await prisma.inventoryCategory.update({
+      where: { id },
+      data: {
+        ...(name !== undefined && { name }),
+        ...(description !== undefined && { description: description || null }),
+        ...(isActive !== undefined && { isActive }),
+      },
+    });
+
+    res.json(updated);
+  } catch (error) {
+    console.error('Error updating category:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// DELETE /api/hr/assets/categories/:id
+router.delete('/categories/:id', requirePermission('hr.assets.categories.delete'), async (req, res) => {
+  try {
+    if (!req.org) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+
+    const { id } = req.params;
+
+    const category = await prisma.inventoryCategory.findFirst({
+      where: {
+        id,
+        orgId: req.org.id,
+      },
+      include: {
+        _count: {
+          select: {
+            items: true,
+          },
+        },
+      },
+    });
+
+    if (!category) {
+      res.status(404).json({ error: 'Category not found' });
+      return;
+    }
+
+    if (((category as { _count?: { items: number } })._count?.items ?? 0) > 0) {
+      res.status(400).json({
+        error: 'Cannot delete category with assets. Please remove or reassign assets first.',
+      });
+      return;
+    }
+
+    await prisma.inventoryCategory.delete({
+      where: { id },
+    });
+
+    res.json({ message: 'Category deleted successfully' });
+  } catch (error) {
+    console.error('Error deleting category:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// ============================================
+// WIDGETS (must be registered before /:id)
+// ============================================
+
+router.get('/widgets/asset-count', requirePermission('hr.assets.view'), async (req, res) => {
+  try {
+    if (!req.org) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+
+    const count = await prisma.inventoryItem.count({
+      where: {
+        orgId: req.org.id,
+      },
+    });
+
+    res.json({ count });
+  } catch (error) {
+    console.error('Error fetching asset count:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+router.get('/widgets/low-stock', requirePermission('hr.assets.view'), async (req, res) => {
+  try {
+    if (!req.org) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+
+    const assets = await prisma.inventoryItem.findMany({
+      where: {
+        orgId: req.org.id,
+        minQuantity: { not: null },
+      },
+      select: {
+        id: true,
+        name: true,
+        quantity: true,
+        minQuantity: true,
+      },
+    });
+
+    const lowStockAssets = assets.filter(
+      (asset: { minQuantity: number | null; quantity: number }) =>
+        asset.minQuantity !== null && asset.quantity <= asset.minQuantity
+    );
+
+    res.json({ count: lowStockAssets.length, assets: lowStockAssets });
+  } catch (error) {
+    console.error('Error fetching low stock assets:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 // GET /api/hr/assets/:id
 router.get('/:id', requirePermission('hr.assets.view'), async (req, res) => {
   try {
@@ -423,241 +657,6 @@ router.delete('/:id/images/:imageId', requirePermission('hr.assets.edit'), async
     res.json({ message: 'Image deleted successfully' });
   } catch (error) {
     console.error('Error deleting asset image:', error);
-    res.status(500).json({ error: 'Internal server error' });
-  }
-});
-
-// ============================================
-// ASSET CATEGORIES
-// ============================================
-
-// GET /api/hr/assets/categories
-router.get('/categories', requirePermission('hr.assets.categories.view'), async (req, res) => {
-  try {
-    if (!req.org) {
-      res.status(401).json({ error: 'Unauthorized' });
-      return;
-    }
-
-    const categories = await prisma.inventoryCategory.findMany({
-      where: {
-        orgId: req.org.id,
-      },
-      include: {
-        _count: {
-          select: {
-            items: true,
-          },
-        },
-      },
-      orderBy: {
-        name: 'asc',
-      },
-    });
-
-    res.json(categories);
-  } catch (error) {
-    console.error('Error fetching categories:', error);
-    res.status(500).json({ error: 'Internal server error' });
-  }
-});
-
-// POST /api/hr/assets/categories
-router.post('/categories', requirePermission('hr.assets.categories.create'), async (req, res) => {
-  try {
-    if (!req.org) {
-      res.status(401).json({ error: 'Unauthorized' });
-      return;
-    }
-
-    const { name, description } = req.body;
-
-    if (!name) {
-      res.status(400).json({ error: 'Name is required' });
-      return;
-    }
-
-    // Check if category with same name exists
-    const existing = await prisma.inventoryCategory.findFirst({
-      where: {
-        orgId: req.org.id,
-        name,
-      },
-    });
-
-    if (existing) {
-      res.status(400).json({ error: 'Category with this name already exists' });
-      return;
-    }
-
-    const category = await prisma.inventoryCategory.create({
-      data: {
-        orgId: req.org.id,
-        name,
-        description: description || null,
-      },
-    });
-
-    res.status(201).json(category);
-  } catch (error) {
-    console.error('Error creating category:', error);
-    res.status(500).json({ error: 'Internal server error' });
-  }
-});
-
-// PUT /api/hr/assets/categories/:id
-router.put('/categories/:id', requirePermission('hr.assets.categories.edit'), async (req, res) => {
-  try {
-    if (!req.org) {
-      res.status(401).json({ error: 'Unauthorized' });
-      return;
-    }
-
-    const { id } = req.params;
-    const { name, description, isActive } = req.body;
-
-    const category = await prisma.inventoryCategory.findFirst({
-      where: {
-        id,
-        orgId: req.org.id,
-      },
-    });
-
-    if (!category) {
-      res.status(404).json({ error: 'Category not found' });
-      return;
-    }
-
-    // Check if new name conflicts with existing category
-    if (name && name !== category.name) {
-      const existing = await prisma.inventoryCategory.findFirst({
-        where: {
-          orgId: req.org.id,
-          name,
-          id: { not: id },
-        },
-      });
-
-      if (existing) {
-        res.status(400).json({ error: 'Category with this name already exists' });
-        return;
-      }
-    }
-
-    const updated = await prisma.inventoryCategory.update({
-      where: { id },
-      data: {
-        ...(name !== undefined && { name }),
-        ...(description !== undefined && { description: description || null }),
-        ...(isActive !== undefined && { isActive }),
-      },
-    });
-
-    res.json(updated);
-  } catch (error) {
-    console.error('Error updating category:', error);
-    res.status(500).json({ error: 'Internal server error' });
-  }
-});
-
-// DELETE /api/hr/assets/categories/:id
-router.delete('/categories/:id', requirePermission('hr.assets.categories.delete'), async (req, res) => {
-  try {
-    if (!req.org) {
-      res.status(401).json({ error: 'Unauthorized' });
-      return;
-    }
-
-    const { id } = req.params;
-
-    const category = await prisma.inventoryCategory.findFirst({
-      where: {
-        id,
-        orgId: req.org.id,
-      },
-      include: {
-        _count: {
-          select: {
-            items: true,
-          },
-        },
-      },
-    });
-
-    if (!category) {
-      res.status(404).json({ error: 'Category not found' });
-      return;
-    }
-
-    if (((category as { _count?: { items: number } })._count?.items ?? 0) > 0) {
-      res.status(400).json({
-        error: 'Cannot delete category with assets. Please remove or reassign assets first.',
-      });
-      return;
-    }
-
-    await prisma.inventoryCategory.delete({
-      where: { id },
-    });
-
-    res.json({ message: 'Category deleted successfully' });
-  } catch (error) {
-    console.error('Error deleting category:', error);
-    res.status(500).json({ error: 'Internal server error' });
-  }
-});
-
-// ============================================
-// WIDGETS
-// ============================================
-
-router.get('/widgets/asset-count', requirePermission('hr.assets.view'), async (req, res) => {
-  try {
-    if (!req.org) {
-      res.status(401).json({ error: 'Unauthorized' });
-      return;
-    }
-
-    const count = await prisma.inventoryItem.count({
-      where: {
-        orgId: req.org.id,
-      },
-    });
-
-    res.json({ count });
-  } catch (error) {
-    console.error('Error fetching asset count:', error);
-    res.status(500).json({ error: 'Internal server error' });
-  }
-});
-
-router.get('/widgets/low-stock', requirePermission('hr.assets.view'), async (req, res) => {
-  try {
-    if (!req.org) {
-      res.status(401).json({ error: 'Unauthorized' });
-      return;
-    }
-
-    const assets = await prisma.inventoryItem.findMany({
-      where: {
-        orgId: req.org.id,
-        minQuantity: { not: null },
-      },
-      select: {
-        id: true,
-        name: true,
-        quantity: true,
-        minQuantity: true,
-      },
-    });
-
-    const lowStockAssets = assets.filter(
-      (asset: { minQuantity: number | null; quantity: number }) => asset.minQuantity !== null && asset.quantity <= asset.minQuantity
-    );
-
-    res.json({ count: lowStockAssets.length, assets: lowStockAssets });
-  } catch (error) {
-    console.error('Error fetching low stock assets:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 });

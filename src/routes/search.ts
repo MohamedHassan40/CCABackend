@@ -23,8 +23,8 @@ router.get('/', async (req: Request, res: Response) => {
     }
 
     const searchTerm = q.trim();
-    if (searchTerm.length < 2) {
-      res.status(400).json({ error: 'Search query must be at least 2 characters' });
+    if (searchTerm.length < 1) {
+      res.status(400).json({ error: 'Search query is required' });
       return;
     }
 

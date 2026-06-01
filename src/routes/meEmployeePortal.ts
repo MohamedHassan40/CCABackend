@@ -396,6 +396,7 @@ router.get('/membership-card', authMiddleware, async (req: Request, res: Respons
             showMemberId: design.showMemberId,
             memberIdPrefix: design.memberIdPrefix,
             fontFamily: design.fontFamily,
+            fontColor: design.fontColor,
           }
         : {
             name: 'Default',
@@ -409,6 +410,7 @@ router.get('/membership-card', authMiddleware, async (req: Request, res: Respons
             showMemberId: true,
             memberIdPrefix: null,
             fontFamily: 'sans-serif',
+            fontColor: '#ffffff',
           },
       verifyUrl,
     });
