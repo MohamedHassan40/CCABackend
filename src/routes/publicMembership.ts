@@ -6,6 +6,12 @@ import { addCalendarMonths } from '../core/dates/membershipEndDate';
 import { isValidEmail } from '../core/validation/email';
 import { normalizeMemberPhone } from '../modules/membership/phone';
 import { getInvoiceCheckoutUrl, moyasarService } from '../core/payments/moyasar';
+import { appendPendingMoyasarInvoiceNote } from '../core/payments/moyasar-invoice-resolve';
+import {
+  enrichMoyasarInvoiceCreateData,
+  withPaymentRedirectFlag,
+} from '../core/payments/moyasar-checkout';
+import { syncMembershipPaymentFromMoyasar } from '../core/payments/membership-payment-callback';
 import {
   linkMemberRecordToUser,
   provisionMemberLoginAccount,
@@ -378,25 +384,31 @@ router.post('/:orgSlug/payment', publicTicketRateLimiter, async (req: Request, r
       email: membership.memberEmail,
     });
 
-    const invoice = await moyasarService.createInvoice({
-      amount,
-      currency: membership.membershipType.currency || 'SAR',
-      description: `Membership: ${membership.membershipType.name} — ${membership.memberName}`,
-      metadata: {
-        type: 'member_membership',
-        memberMembershipId: membership.id,
-        organizationId: org.id,
-        organizationSlug: slug,
-        action: paymentAction,
-      },
-      success_url:
-        paymentAction === 'renew'
-          ? `${fe}/membership/${slug}/account?renewed=1`
-          : `${fe}/membership/${slug}/track?${trackQs.toString()}&payment=success`,
-      back_url: `${fe}/membership/${slug}/pay?membershipId=${membership.id}&email=${encodeURIComponent(membership.memberEmail)}&action=${paymentAction}&payment=failed`,
-      callback_url: `${api}/api/public/membership/payment-callback`,
-      expired_at: new Date(Date.now() + 48 * 60 * 60 * 1000).toISOString(),
-    });
+    const payBackBase = `${fe}/membership/${slug}/pay?membershipId=${membership.id}&email=${encodeURIComponent(membership.memberEmail)}&action=${paymentAction}`;
+    const invoice = await moyasarService.createInvoice(
+      enrichMoyasarInvoiceCreateData({
+        amount,
+        currency: membership.membershipType.currency || 'SAR',
+        description: `Membership: ${membership.membershipType.name} — ${membership.memberName}`,
+        metadata: {
+          type: 'member_membership',
+          memberMembershipId: membership.id,
+          organizationId: org.id,
+          organizationSlug: slug,
+          action: paymentAction,
+        },
+        success_url:
+          paymentAction === 'renew'
+            ? withPaymentRedirectFlag(`${fe}/membership/${slug}/account?renewed=1`, 'success')
+            : withPaymentRedirectFlag(
+                `${fe}/membership/${slug}/track?${trackQs.toString()}`,
+                'success'
+              ),
+        back_url: withPaymentRedirectFlag(payBackBase, 'cancelled'),
+        callback_url: `${api}/api/public/membership/payment-callback`,
+        expired_at: new Date(Date.now() + 48 * 60 * 60 * 1000).toISOString(),
+      })
+    );
 
     const checkoutUrl = getInvoiceCheckoutUrl(invoice);
     if (!checkoutUrl) {
@@ -407,7 +419,10 @@ router.post('/:orgSlug/payment', publicTicketRateLimiter, async (req: Request, r
     if (paymentAction === 'activate' || paymentAction === 'renew') {
       await prisma.memberMembership.update({
         where: { id: membership.id },
-        data: { paymentStatus: 'pending' },
+        data: {
+          paymentStatus: 'pending',
+          notes: appendPendingMoyasarInvoiceNote(membership.notes, invoice.id),
+        },
       });
     }
 
@@ -422,6 +437,53 @@ router.post('/:orgSlug/payment', publicTicketRateLimiter, async (req: Request, r
     console.error('POST public membership payment:', error);
     const msg = error instanceof Error ? error.message : 'Could not start payment';
     res.status(502).json({ error: msg });
+  }
+});
+
+// POST /api/public/membership/:orgSlug/sync-payment — activate after Moyasar redirect if webhook was missed
+router.post('/:orgSlug/sync-payment', publicTicketRateLimiter, async (req: Request, res: Response) => {
+  try {
+    const org = await resolveOrgAndModule(req.params.orgSlug);
+    if (!org) {
+      res.status(404).json({ error: 'Membership portal not found' });
+      return;
+    }
+
+    const { membershipId, email, invoiceId } = req.body;
+    if (!membershipId || !email) {
+      res.status(400).json({ error: 'membershipId and email are required' });
+      return;
+    }
+
+    if (!process.env.MOYASAR_SECRET_KEY) {
+      res.status(503).json({ error: 'Online payment is not configured' });
+      return;
+    }
+
+    const result = await syncMembershipPaymentFromMoyasar({
+      orgId: org.id,
+      membershipId: String(membershipId),
+      email: String(email),
+      invoiceId: invoiceId ? String(invoiceId) : undefined,
+    });
+
+    if (!result.ok) {
+      const status = result.error === 'Payment not completed yet' ? 409 : 400;
+      res.status(status).json({
+        error: result.error,
+        invoiceStatus: 'invoiceStatus' in result ? result.invoiceStatus : undefined,
+      });
+      return;
+    }
+
+    res.json({
+      success: true,
+      membershipId: result.membershipId,
+      message: 'Membership payment synced successfully',
+    });
+  } catch (error) {
+    console.error('POST public membership sync-payment:', error);
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 

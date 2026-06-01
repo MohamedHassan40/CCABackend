@@ -3,6 +3,10 @@
 
 import prisma from '../db';
 import { getInvoiceCheckoutUrl, moyasarService } from '../payments/moyasar';
+import {
+  enrichMoyasarInvoiceCreateData,
+  withPaymentRedirectFlag,
+} from '../payments/moyasar-checkout';
 import { sendEmail, emailTemplates } from '../email';
 import { captureException } from '../errorTracking';
 
@@ -203,25 +207,30 @@ async function attemptRenewal(subscription: any): Promise<RenewalResult> {
       );
 
       try {
-        const invoice = await moyasarService.createInvoice({
-          amount: modulePrice.priceCents,
-          currency: modulePrice.currency,
-          description: `Renewal: ${subscription.module.name} - ${subscription.plan} plan`,
-          metadata: {
-            organizationId: subscription.organizationId,
-            organizationName: subscription.organization.name,
-            moduleId: subscription.moduleId,
-            moduleKey: subscription.module.key,
-            plan: subscription.plan,
-            billingPeriod: 'monthly',
-            subscriptionId: subscription.id,
-            isRenewal: true,
-          },
-          success_url: `${frontendUrl}/dashboard/subscription?renewal=success`,
-          back_url: `${frontendUrl}/dashboard/subscription`,
-          callback_url: `${apiUrl}/api/subscriptions/payment-callback`,
-          expired_at: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(), // 7 days
-        });
+        const invoice = await moyasarService.createInvoice(
+          enrichMoyasarInvoiceCreateData({
+            amount: modulePrice.priceCents,
+            currency: modulePrice.currency,
+            description: `Renewal: ${subscription.module.name} - ${subscription.plan} plan`,
+            metadata: {
+              organizationId: subscription.organizationId,
+              organizationName: subscription.organization.name,
+              moduleId: subscription.moduleId,
+              moduleKey: subscription.module.key,
+              plan: subscription.plan,
+              billingPeriod: 'monthly',
+              subscriptionId: subscription.id,
+              isRenewal: true,
+            },
+            success_url: withPaymentRedirectFlag(
+              `${frontendUrl}/dashboard/subscription?renewal=success`,
+              'success'
+            ),
+            back_url: withPaymentRedirectFlag(`${frontendUrl}/dashboard/subscription`, 'cancelled'),
+            callback_url: `${apiUrl}/api/subscriptions/payment-callback`,
+            expired_at: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
+          })
+        );
 
         const checkoutUrl = getInvoiceCheckoutUrl(invoice);
 

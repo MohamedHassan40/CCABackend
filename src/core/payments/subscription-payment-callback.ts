@@ -2,18 +2,11 @@ import type { Request, Response } from 'express';
 import type { Subscription } from '@prisma/client';
 import prisma from '../db';
 import type { MoyasarInvoice } from './moyasar';
-
-function mergeMetadata(body: Record<string, unknown>, invoice: MoyasarInvoice): Record<string, unknown> {
-  const fromInvoice =
-    invoice.metadata && typeof invoice.metadata === 'object' && !Array.isArray(invoice.metadata)
-      ? invoice.metadata
-      : {};
-  const fromBody =
-    body.metadata && typeof body.metadata === 'object' && !Array.isArray(body.metadata)
-      ? (body.metadata as Record<string, unknown>)
-      : {};
-  return { ...fromInvoice, ...fromBody };
-}
+import { activateMembershipFromPaidMoyasarInvoice } from './membership-payment-callback';
+import { mergeMoyasarMetadata, resolveMoyasarInvoiceFromWebhookBody } from './moyasar-invoice-resolve';
+import { invoicePaidWithCreditOrDebitCard } from './moyasar-checkout';
+import { isTerminalFailedInvoiceStatus } from './payment-invoice-status';
+import { markSubscriptionPaymentFailedFromInvoice } from './subscription-payment-failure';
 
 export type ActivateSubscriptionResult =
   | { ok: true; subscription: Subscription }
@@ -27,7 +20,7 @@ export async function activateSubscriptionFromPaidMoyasarInvoice(
   invoice: MoyasarInvoice,
   webhookBody: Record<string, unknown> = {},
 ): Promise<ActivateSubscriptionResult> {
-  const metadata = mergeMetadata(webhookBody, invoice);
+  const metadata = mergeMoyasarMetadata(webhookBody, invoice);
   const orgId = metadata.organizationId as string | undefined;
   const moduleId = metadata.moduleId as string | undefined;
   const plan = metadata.plan as string | undefined;
@@ -36,6 +29,13 @@ export async function activateSubscriptionFromPaidMoyasarInvoice(
   if (!orgId || !moduleId || !plan) {
     console.error('Missing organizationId, moduleId, or plan in Moyasar invoice metadata');
     return { ok: false, error: 'Missing organization, module, or plan information for this payment' };
+  }
+
+  if (!invoicePaidWithCreditOrDebitCard(invoice)) {
+    return {
+      ok: false,
+      error: 'Only credit and debit card payments are accepted for subscriptions',
+    };
   }
 
   const invoiceId = invoice.id;
@@ -48,13 +48,6 @@ export async function activateSubscriptionFromPaidMoyasarInvoice(
   });
 
   const now = new Date();
-
-  if (payment) {
-    await prisma.payment.update({
-      where: { id: payment.id },
-      data: { status: 'succeeded', paidAt: now },
-    });
-  }
 
   const currentPeriodEnd = new Date(now);
   if (billingPeriod === 'monthly') {
@@ -92,6 +85,13 @@ export async function activateSubscriptionFromPaidMoyasarInvoice(
           currentPeriodEnd,
         },
       });
+
+  if (payment) {
+    await prisma.payment.update({
+      where: { id: payment.id },
+      data: { status: 'succeeded', paidAt: now, subscriptionId: subscription.id },
+    });
+  }
 
   await prisma.orgModule.upsert({
     where: {
@@ -171,6 +171,54 @@ export async function activateSubscriptionFromPaidMoyasarInvoice(
  *
  * Accepts either an **invoice** payload (`id` = invoice id) or a **payment** payload (`invoice_id` set, or `id` = payment id).
  */
+/** Sync pending Moyasar checkout(s) when the webhook was missed (e.g. local dev). */
+export async function syncPendingSubscriptionCheckouts(organizationId: string): Promise<{
+  synced: number;
+  subscriptions: Subscription[];
+  errors: string[];
+}> {
+  const { moyasarService } = await import('./moyasar');
+  const pending = await prisma.payment.findMany({
+    where: {
+      organizationId,
+      status: 'pending',
+      provider: 'moyasar',
+      providerRef: { not: null },
+    },
+    orderBy: { createdAt: 'desc' },
+    take: 10,
+  });
+
+  const subscriptions: Subscription[] = [];
+  const errors: string[] = [];
+  let synced = 0;
+
+  for (const row of pending) {
+    if (!row.providerRef) continue;
+    try {
+      const invoice = await moyasarService.getInvoiceById(row.providerRef);
+      if (isTerminalFailedInvoiceStatus(invoice.status)) {
+        await markSubscriptionPaymentFailedFromInvoice(invoice);
+        continue;
+      }
+      if (invoice.status !== 'paid') continue;
+      const metadata = mergeMoyasarMetadata({}, invoice);
+      if (metadata.type === 'member_membership') continue;
+      const result = await activateSubscriptionFromPaidMoyasarInvoice(invoice, {});
+      if (result.ok) {
+        synced += 1;
+        subscriptions.push(result.subscription);
+      } else {
+        errors.push(result.error);
+      }
+    } catch (e) {
+      errors.push(e instanceof Error ? e.message : 'Sync failed');
+    }
+  }
+
+  return { synced, subscriptions, errors };
+}
+
 export async function handleSubscriptionPaymentCallback(req: Request, res: Response): Promise<void> {
   try {
     const body = req.body as Record<string, unknown>;
@@ -180,39 +228,41 @@ export async function handleSubscriptionPaymentCallback(req: Request, res: Respo
       return;
     }
 
-    const candidateId =
-      typeof body.invoice_id === 'string'
-        ? body.invoice_id
-        : typeof body.id === 'string'
-          ? body.id
-          : undefined;
-
-    if (!candidateId) {
-      res.status(400).json({ error: 'Missing required fields' });
+    const invoice = await resolveMoyasarInvoiceFromWebhookBody(body);
+    if (!invoice) {
+      res.status(400).json({ error: 'Invalid invoice or payment reference' });
       return;
     }
 
-    const { moyasarService } = await import('./moyasar');
-
-    let invoice: MoyasarInvoice;
-    try {
-      invoice = await moyasarService.getInvoiceById(candidateId);
-    } catch {
-      try {
-        const pay = await moyasarService.getPaymentById(candidateId);
-        if (!pay.invoice_id) {
-          res.status(400).json({ error: 'Could not resolve invoice for callback' });
-          return;
-        }
-        invoice = await moyasarService.getInvoiceById(pay.invoice_id);
-      } catch {
-        res.status(400).json({ error: 'Invalid invoice or payment reference' });
-        return;
-      }
-    }
+    const metadata = mergeMoyasarMetadata(body, invoice);
 
     if (invoice.status !== 'paid') {
-      res.json({ received: true, message: 'Payment not completed yet' });
+      if (metadata.type !== 'member_membership' && isTerminalFailedInvoiceStatus(invoice.status)) {
+        await markSubscriptionPaymentFailedFromInvoice(invoice);
+      }
+      res.json({
+        received: true,
+        message: 'Payment not completed yet',
+        invoiceStatus: invoice.status,
+      });
+      return;
+    }
+
+    if (!invoicePaidWithCreditOrDebitCard(invoice)) {
+      if (metadata.type !== 'member_membership') {
+        await markSubscriptionPaymentFailedFromInvoice(invoice);
+      }
+      res.status(400).json({ error: 'Only credit and debit card payments are accepted' });
+      return;
+    }
+
+    if (metadata.type === 'member_membership') {
+      const membershipResult = await activateMembershipFromPaidMoyasarInvoice(invoice, body);
+      if (!membershipResult.ok) {
+        res.status(400).json({ error: membershipResult.error });
+        return;
+      }
+      res.json({ success: true, membershipId: membershipResult.membershipId });
       return;
     }
 

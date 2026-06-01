@@ -66,7 +66,17 @@ if (config.nodeEnv === 'production') {
   app.use('/api', csrfProtection);
   app.use(setCsrfToken);
 }
-app.use(express.json());
+app.use(
+  express.json({
+    verify: (req, _res, buf) => {
+      const expressReq = req as express.Request;
+      const path = (expressReq.originalUrl || expressReq.url || '').split('?')[0] ?? '';
+      if (path.includes('payment-callback')) {
+        expressReq.rawBody = buf;
+      }
+    },
+  })
+);
 
 // Local file uploads (logos, attachments stored on disk)
 const uploadDir = path.resolve(process.env.UPLOAD_DIR || path.join(process.cwd(), 'uploads'));
@@ -151,10 +161,17 @@ const subscriptionPaymentCallbackMiddleware = [
   handleSubscriptionPaymentCallback,
 ] as const;
 
+const membershipPaymentCallbackMiddleware = [
+  logWebhookEvent,
+  webhookIdempotency,
+  verifyMoyasarWebhook,
+  handleMembershipPaymentCallback,
+] as const;
+
 // Payment callback webhook (no auth — Moyasar calls this). Legacy path kept for existing integrations.
 app.post('/api/billing/payment-callback', ...subscriptionPaymentCallbackMiddleware);
 app.post('/api/subscriptions/payment-callback', ...subscriptionPaymentCallbackMiddleware);
-app.post('/api/public/membership/payment-callback', ...subscriptionPaymentCallbackMiddleware, handleMembershipPaymentCallback);
+app.post('/api/public/membership/payment-callback', ...membershipPaymentCallbackMiddleware);
 
 // Error handler with tracking and user-friendly messages (no raw DB/stack in response)
 app.use((err: Error, req: express.Request, res: express.Response, next: express.NextFunction) => {

@@ -5,6 +5,11 @@ import { authMiddleware } from '../middleware/auth';
 import { addCalendarMonths } from '../core/dates/membershipEndDate';
 import { findMemberRecordForUser, linkMemberRecordToUser } from '../core/membership/memberAccounts';
 import { getInvoiceCheckoutUrl, moyasarService } from '../core/payments/moyasar';
+import { appendPendingMoyasarInvoiceNote } from '../core/payments/moyasar-invoice-resolve';
+import {
+  enrichMoyasarInvoiceCreateData,
+  withPaymentRedirectFlag,
+} from '../core/payments/moyasar-checkout';
 import {
   buildMembershipVerifyUrl,
   ensureMembershipQrToken,
@@ -393,22 +398,27 @@ router.post('/member-portal/:orgSlug/renew/payment', authMiddleware, async (req:
     const slug = ctx.org.slug!;
     const portalQs = new URLSearchParams({ renewed: '1' });
 
-    const invoice = await moyasarService.createInvoice({
-      amount,
-      currency: membership.membershipType.currency || 'SAR',
-      description: `Renewal: ${membership.membershipType.name} — ${membership.memberName}`,
-      metadata: {
-        type: 'member_membership',
-        memberMembershipId: membership.id,
-        organizationId: ctx.org.id,
-        organizationSlug: slug,
-        action: 'renew',
-      },
-      success_url: `${fe}/membership/${slug}/account?${portalQs.toString()}`,
-      back_url: `${fe}/membership/${slug}/account`,
-      callback_url: `${api}/api/public/membership/payment-callback`,
-      expired_at: new Date(Date.now() + 48 * 60 * 60 * 1000).toISOString(),
-    });
+    const invoice = await moyasarService.createInvoice(
+      enrichMoyasarInvoiceCreateData({
+        amount,
+        currency: membership.membershipType.currency || 'SAR',
+        description: `Renewal: ${membership.membershipType.name} — ${membership.memberName}`,
+        metadata: {
+          type: 'member_membership',
+          memberMembershipId: membership.id,
+          organizationId: ctx.org.id,
+          organizationSlug: slug,
+          action: 'renew',
+        },
+        success_url: withPaymentRedirectFlag(
+          `${fe}/membership/${slug}/account?${portalQs.toString()}`,
+          'success'
+        ),
+        back_url: withPaymentRedirectFlag(`${fe}/membership/${slug}/account`, 'cancelled'),
+        callback_url: `${api}/api/public/membership/payment-callback`,
+        expired_at: new Date(Date.now() + 48 * 60 * 60 * 1000).toISOString(),
+      })
+    );
 
     const checkoutUrl = getInvoiceCheckoutUrl(invoice);
     if (!checkoutUrl) {
@@ -418,7 +428,10 @@ router.post('/member-portal/:orgSlug/renew/payment', authMiddleware, async (req:
 
     await prisma.memberMembership.update({
       where: { id: membership.id },
-      data: { paymentStatus: 'pending' },
+      data: {
+        paymentStatus: 'pending',
+        notes: appendPendingMoyasarInvoiceNote(membership.notes, invoice.id),
+      },
     });
 
     res.json({

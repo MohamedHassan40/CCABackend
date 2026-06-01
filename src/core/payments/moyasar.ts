@@ -4,6 +4,7 @@
 
 import axios, { type AxiosError } from 'axios';
 import { randomUUID } from 'crypto';
+import { buildHostedInvoiceCheckoutUrl } from './moyasar-checkout';
 
 const MOYASAR_SECRET_KEY = process.env.MOYASAR_SECRET_KEY || '';
 const MOYASAR_PUBLISHABLE_KEY = process.env.MOYASAR_PUBLISHABLE_KEY || process.env.MOYASAR_PUBLIC_KEY || '';
@@ -127,9 +128,10 @@ function moyasarErrorMessage(error: unknown): string {
   return 'Moyasar request failed';
 }
 
-/** Hosted invoice checkout URL from create/fetch invoice responses */
+/** Hosted invoice checkout URL from create/fetch invoice responses (card-only query params applied). */
 export function getInvoiceCheckoutUrl(invoice: MoyasarInvoice): string | undefined {
-  return invoice.url ?? invoice.invoice_url ?? undefined;
+  const raw = invoice.url ?? invoice.invoice_url ?? undefined;
+  return raw ? buildHostedInvoiceCheckoutUrl(raw) : undefined;
 }
 
 class MoyasarService {

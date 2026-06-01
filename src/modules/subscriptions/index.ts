@@ -2,19 +2,18 @@ import { Router } from 'express';
 import prisma from '../../core/db';
 import { authMiddleware } from '../../middleware/auth';
 import { requirePermission } from '../../middleware/permissions';
-import { activateSubscriptionFromPaidMoyasarInvoice } from '../../core/payments/subscription-payment-callback';
+import {
+  activateSubscriptionFromPaidMoyasarInvoice,
+  syncPendingSubscriptionCheckouts,
+} from '../../core/payments/subscription-payment-callback';
 import { getInvoiceCheckoutUrl, moyasarService } from '../../core/payments/moyasar';
-import type { MoyasarInvoiceStatus } from '../../core/payments/moyasar';
+import {
+  enrichMoyasarInvoiceCreateData,
+  withPaymentRedirectFlag,
+} from '../../core/payments/moyasar-checkout';
+import { isStaleInvoice } from '../../core/payments/payment-invoice-status';
 
 const router = Router();
-
-const STALE_INVOICE_STATUSES: MoyasarInvoiceStatus[] = [
-  'expired',
-  'failed',
-  'canceled',
-  'voided',
-  'refunded',
-];
 
 function normalizePublicBaseUrl(value: string | undefined, fallback: string): string {
   const raw = (value || '').trim();
@@ -138,15 +137,7 @@ router.post('/subscribe', requirePermission('subscriptions.manage'), async (req,
             return;
           }
 
-          const status = remoteInvoice.status;
-          const pastExpiry =
-            !!remoteInvoice.expired_at &&
-            !Number.isNaN(Date.parse(remoteInvoice.expired_at)) &&
-            new Date(remoteInvoice.expired_at).getTime() < Date.now();
-
-          const stale =
-            (!!status && STALE_INVOICE_STATUSES.includes(status as MoyasarInvoiceStatus)) ||
-            pastExpiry;
+          const stale = isStaleInvoice(remoteInvoice);
 
           if (stale) {
             await prisma.payment.update({
@@ -186,24 +177,32 @@ router.post('/subscribe', requirePermission('subscriptions.manage'), async (req,
           process.env.API_URL || process.env.RAILWAY_PUBLIC_DOMAIN,
           'http://localhost:3001'
         );
-        const invoice = await moyasarService.createInvoice({
-          amount: modulePrice.priceCents,
-          currency: modulePrice.currency,
-          description: `Subscription: ${module.name} - ${plan} plan (${period})`,
-          metadata: {
-            organizationId: req.org.id,
-            organizationName: req.org.name,
-            moduleId: module.id,
-            moduleKey: module.key,
-            plan,
-            billingPeriod: period,
-            userId: req.user.id,
-          },
-          success_url: `${frontendUrl}/dashboard/subscription?payment=success`,
-          back_url: `${frontendUrl}/dashboard/subscription/modules`,
-          callback_url: `${apiBase}/api/subscriptions/payment-callback`,
-          expired_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
-        });
+        const invoice = await moyasarService.createInvoice(
+          enrichMoyasarInvoiceCreateData({
+            amount: modulePrice.priceCents,
+            currency: modulePrice.currency,
+            description: `Subscription: ${module.name} - ${plan} plan (${period})`,
+            metadata: {
+              organizationId: req.org.id,
+              organizationName: req.org.name,
+              moduleId: module.id,
+              moduleKey: module.key,
+              plan,
+              billingPeriod: period,
+              userId: req.user.id,
+            },
+            success_url: withPaymentRedirectFlag(
+              `${frontendUrl}/dashboard/subscription`,
+              'success'
+            ),
+            back_url: withPaymentRedirectFlag(
+              `${frontendUrl}/dashboard/subscription/modules`,
+              'cancelled'
+            ),
+            callback_url: `${apiBase}/api/subscriptions/payment-callback`,
+            expired_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+          })
+        );
 
         const checkoutUrl = getInvoiceCheckoutUrl(invoice);
         if (!checkoutUrl) {
@@ -333,6 +332,33 @@ router.post('/subscribe', requirePermission('subscriptions.manage'), async (req,
     });
   } catch (error) {
     console.error('Error subscribing to module:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// POST /api/subscriptions/sync-checkout — reconcile paid Moyasar invoices (webhook fallback)
+router.post('/sync-checkout', requirePermission('subscriptions.manage'), async (req, res) => {
+  try {
+    if (!req.org) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+
+    if (!process.env.MOYASAR_SECRET_KEY) {
+      res.status(503).json({ error: 'Online payment is not configured' });
+      return;
+    }
+
+    const result = await syncPendingSubscriptionCheckouts(req.org.id);
+    res.json({
+      message:
+        result.synced > 0
+          ? 'Subscription status synced from Moyasar'
+          : 'No completed payments found to sync',
+      ...result,
+    });
+  } catch (error) {
+    console.error('Error syncing subscription checkout:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
@@ -568,24 +594,32 @@ router.put('/:id/plan', requirePermission('subscriptions.manage'), async (req, r
           process.env.API_URL || process.env.RAILWAY_PUBLIC_DOMAIN,
           'http://localhost:3001'
         );
-        const invoice = await moyasarService.createInvoice({
-          amount: modulePrice.priceCents,
-          currency: modulePrice.currency,
-          description: `Plan change: ${subscription.module.name} — ${plan} (${period})`,
-          metadata: {
-            organizationId: req.org.id,
-            organizationName: req.org.name,
-            moduleId: subscription.moduleId,
-            moduleKey: subscription.module.key,
-            plan,
-            billingPeriod: period,
-            userId: req.user.id,
-          },
-          success_url: `${frontendUrl}/dashboard/subscription?payment=success`,
-          back_url: `${frontendUrl}/dashboard/subscription/modules`,
-          callback_url: `${apiBase}/api/subscriptions/payment-callback`,
-          expired_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
-        });
+        const invoice = await moyasarService.createInvoice(
+          enrichMoyasarInvoiceCreateData({
+            amount: modulePrice.priceCents,
+            currency: modulePrice.currency,
+            description: `Plan change: ${subscription.module.name} — ${plan} (${period})`,
+            metadata: {
+              organizationId: req.org.id,
+              organizationName: req.org.name,
+              moduleId: subscription.moduleId,
+              moduleKey: subscription.module.key,
+              plan,
+              billingPeriod: period,
+              userId: req.user.id,
+            },
+            success_url: withPaymentRedirectFlag(
+              `${frontendUrl}/dashboard/subscription`,
+              'success'
+            ),
+            back_url: withPaymentRedirectFlag(
+              `${frontendUrl}/dashboard/subscription/modules`,
+              'cancelled'
+            ),
+            callback_url: `${apiBase}/api/subscriptions/payment-callback`,
+            expired_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+          })
+        );
 
         const checkoutUrl = getInvoiceCheckoutUrl(invoice);
         if (!checkoutUrl) {
