@@ -17,6 +17,7 @@ const upload = multer({
     // Allow images, documents, and common support file types (e.g. for ticket attachments)
     const allowedMimes = [
       'image/jpeg',
+      'image/jpg',
       'image/png',
       'image/gif',
       'image/webp',
@@ -29,7 +30,7 @@ const upload = multer({
       'text/csv',
       'application/zip',
     ];
-    if (allowedMimes.includes(file.mimetype)) {
+    if (allowedMimes.includes(file.mimetype) || file.mimetype.startsWith('image/')) {
       cb(null, true);
     } else {
       cb(new Error('Invalid file type'));

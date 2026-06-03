@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import prisma from '../core/db';
+import { getOrgModuleAccessState } from '../core/modules/orgModuleAccess';
 
 /**
  * Middleware to require that a module is enabled for the current organization
@@ -57,21 +58,31 @@ export function requireModuleEnabled(moduleKey: string) {
       return;
     }
 
-      if (!orgModule || !orgModule.isEnabled) {
+      if (!orgModule) {
         res.status(403).json({ error: `Module ${moduleKey} is not enabled for this organization` });
         return;
       }
 
-      // Check expiry
-      const now = new Date();
-      if (orgModule.expiresAt && orgModule.expiresAt < now) {
-        res.status(403).json({ error: `Module ${moduleKey} subscription has expired` });
+      const subscription = await prisma.subscription.findFirst({
+        where: {
+          organizationId: req.org.id,
+          moduleId: module.id,
+        },
+        orderBy: { createdAt: 'desc' },
+      });
+
+      const access = getOrgModuleAccessState(orgModule, subscription);
+      if (access.isExpired) {
+        res.status(403).json({
+          error: `Module ${moduleKey} subscription has expired`,
+          code: 'MODULE_SUBSCRIPTION_EXPIRED',
+          moduleKey,
+        });
         return;
       }
 
-      // Check trial expiry
-      if (orgModule.trialEndsAt && orgModule.trialEndsAt < now) {
-        res.status(403).json({ error: `Module ${moduleKey} trial has expired` });
+      if (!orgModule.isEnabled) {
+        res.status(403).json({ error: `Module ${moduleKey} is not enabled for this organization` });
         return;
       }
 

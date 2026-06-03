@@ -138,17 +138,7 @@ async function sendTrialExpiryNotification(orgModule: any, daysLeft: number): Pr
  * Disable expired trial
  */
 async function disableExpiredTrial(orgModule: any): Promise<void> {
-  await prisma.orgModule.update({
-    where: {
-      organizationId_moduleId: {
-        organizationId: orgModule.organizationId,
-        moduleId: orgModule.moduleId,
-      },
-    },
-    data: {
-      isEnabled: false,
-    },
-  });
+  // Trial end date blocks access; keep module in nav for subscribe/renew
 
   // Send expiration email
   const owner = orgModule.organization.memberships?.[0]?.user;

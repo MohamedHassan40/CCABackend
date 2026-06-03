@@ -176,7 +176,6 @@ async function attemptRenewal(subscription: any): Promise<RenewalResult> {
           moduleId: subscription.moduleId,
         },
         data: {
-          isEnabled: false,
           expiresAt: subscription.currentPeriodEnd,
         },
       });

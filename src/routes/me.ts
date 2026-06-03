@@ -4,6 +4,7 @@ import { authMiddleware } from '../middleware/auth';
 import { hashPassword, verifyPassword } from '../core/auth/password';
 import type { MeResponse, ModuleManifestResponse } from '@cloud-org/shared';
 import { moduleRegistry } from '../core/modules/registry';
+import { getOrgModuleAccessState, orgModuleHadAccess } from '../core/modules/orgModuleAccess';
 
 const router = Router();
 
@@ -253,20 +254,31 @@ router.get('/modules', authMiddleware, async (req: Request, res: Response) => {
       return;
     }
 
-    // Get modules for current org - include enabled ones and ones with active trials
     const now = new Date();
+    const subscriptions = await prisma.subscription.findMany({
+      where: { organizationId: req.org.id },
+      orderBy: { createdAt: 'desc' },
+    });
+    const latestSubscriptionByModuleId = new Map<string, (typeof subscriptions)[0]>();
+    for (const sub of subscriptions) {
+      if (!latestSubscriptionByModuleId.has(sub.moduleId)) {
+        latestSubscriptionByModuleId.set(sub.moduleId, sub);
+      }
+    }
+
+    const subscribedModuleIds = [...latestSubscriptionByModuleId.keys()];
+
+    // Include active, trialing, and expired modules (expired stay visible for renew/subscribe)
     const orgModules = await prisma.orgModule.findMany({
       where: {
         organizationId: req.org.id,
         OR: [
           { isEnabled: true },
-          // Include modules with active trials even if not explicitly enabled
-          {
-            isEnabled: false,
-            trialEndsAt: {
-              gte: now,
-            },
-          },
+          { expiresAt: { not: null } },
+          { trialEndsAt: { not: null } },
+          ...(subscribedModuleIds.length > 0
+            ? [{ moduleId: { in: subscribedModuleIds } }]
+            : []),
         ],
       },
       include: {
@@ -329,15 +341,19 @@ router.get('/modules', authMiddleware, async (req: Request, res: Response) => {
     const hasAllPermissions = req.user.isSuperAdmin;
 
     for (const orgModule of orgModules) {
-      // Check expiry
-      const isExpired = orgModule.expiresAt ? orgModule.expiresAt < now : false;
-      // Super admins don't have trials - they have full access
-      const isTrial = !hasAllPermissions && !!orgModule.trialEndsAt && orgModule.trialEndsAt >= now;
-
-      // Skip if expired (unless we want to show expired modules for upsell)
-      if (isExpired && !orgModule.trialEndsAt) {
+      const subscription = latestSubscriptionByModuleId.get(orgModule.moduleId);
+      const hadAccess = orgModuleHadAccess(orgModule, !!subscription);
+      if (!hadAccess) {
         continue;
       }
+
+      const access = getOrgModuleAccessState(
+        orgModule,
+        subscription,
+        now,
+        hasAllPermissions
+      );
+      const { isExpired, isTrial } = access;
 
       // Get module manifest from registry
       const moduleRegistration = moduleRegistry.get(orgModule.module.key);

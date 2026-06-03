@@ -77,8 +77,7 @@ class StorageService {
         return `https://res.cloudinary.com/${this.config.cloudName}/image/upload/${storageKey}`;
       case 'local':
       default:
-        const baseUrl = process.env.API_URL || process.env.FRONTEND_URL || 'http://localhost:3001';
-        return `${baseUrl}/uploads/${storageKey}`;
+        return `/uploads/${storageKey.replace(/^\/+/, '')}`;
     }
   }
 
@@ -93,13 +92,16 @@ class StorageService {
 
     const uniqueName = `${uuidv4()}${path.extname(file.originalname)}`;
     const filePath = path.join(targetDir, uniqueName);
+    const storageKey = folder
+      ? path.posix.join(folder.replace(/\\/g, '/').replace(/^\/+/, ''), uniqueName)
+      : uniqueName;
 
     fs.writeFileSync(filePath, file.buffer);
 
     return {
-      url: this.getFileUrl(uniqueName, 'local'),
+      url: this.getFileUrl(storageKey, 'local'),
       storageType: 'local',
-      storageKey: uniqueName,
+      storageKey,
       fileName: uniqueName,
       size: file.size,
       mimeType: file.mimetype,

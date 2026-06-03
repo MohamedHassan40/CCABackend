@@ -57,15 +57,7 @@ export async function checkModuleAccessExpiry(): Promise<ModuleAccessExpiryResul
       const daysUntilExpiry = Math.ceil(ms / (1000 * 60 * 60 * 24));
 
       if (ms < 0) {
-        await prisma.orgModule.update({
-          where: {
-            organizationId_moduleId: {
-              organizationId: om.organizationId,
-              moduleId: om.moduleId,
-            },
-          },
-          data: { isEnabled: false },
-        });
+        // Keep module visible in UI; access is blocked via expiresAt + middleware
         result.disabled++;
         const tpl = emailTemplates.subscriptionAccessEnded(
           om.organization.name,
