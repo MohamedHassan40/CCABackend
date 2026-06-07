@@ -1537,6 +1537,9 @@ model Deliverable {
   priority     String    @default("medium") // "low", "medium", "high", "urgent"
   dueDate      DateTime?
   completedAt  DateTime?
+  quantity     Int       @default(1)
+  unitCostCents Int      @default(0) // Cost per unit in cents
+  totalCostCents Int     @default(0) // quantity * unitCostCents
   assignedTo   String? // Employee ID or Client Project Manager ID
   assignedType String? // "employee", "client_manager"
   notes        String?

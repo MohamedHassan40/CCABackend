@@ -13,6 +13,12 @@ import {
   getUserPermissionKeys,
   requireProjectAccess,
 } from './project-access';
+import { syncProjectBudgetTotals } from './budget-sync';
+import {
+  getDeliverableBudgetSummary,
+  validateDeliverableCost,
+} from './deliverable-budget';
+import { ensureProjectPortalToken } from '../../routes/publicPmo';
 
 const router = Router();
 
@@ -192,6 +198,17 @@ router.get('/projects/:id', requirePermission('pmo.projects.view'), async (req, 
       return;
     }
 
+    if (!project.portalToken && accessResult.access === 'org') {
+      const updated = await prisma.project.update({
+        where: { id },
+        data: { portalToken: ensureProjectPortalToken() },
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        include: include as any,
+      });
+      res.json({ ...updated, access: accessResult.access });
+      return;
+    }
+
     res.json({ ...project, access: accessResult.access });
   } catch (error) {
     console.error('Error fetching project:', error);
@@ -239,6 +256,7 @@ router.post('/projects', requirePermission('pmo.projects.create'), async (req, r
         budgetCents: budgetCents || null,
         currency: currency || 'SAR',
         notes: notes || null,
+        portalToken: ensureProjectPortalToken(),
       },
     });
 
@@ -345,6 +363,30 @@ router.put('/projects/:id', requirePermission('pmo.projects.edit'), async (req, 
     res.json(updated);
   } catch (error) {
     console.error('Error updating project:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// POST /api/pmo/projects/:id/regenerate-portal-token
+router.post('/projects/:id/regenerate-portal-token', requirePermission('pmo.projects.edit'), async (req, res) => {
+  try {
+    if (!req.org) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+
+    const { id } = req.params;
+    if (!(await requireProjectAccess(req, res, id))) return;
+
+    const updated = await prisma.project.update({
+      where: { id },
+      data: { portalToken: ensureProjectPortalToken() },
+      select: { id: true, portalToken: true },
+    });
+
+    res.json(updated);
+  } catch (error) {
+    console.error('Error regenerating portal token:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
@@ -912,6 +954,54 @@ router.post('/projects/:id/client-contacts', requirePermission('pmo.client_manag
   }
 });
 
+// PUT /api/pmo/projects/:id/client-contacts/:contactId
+router.put('/projects/:id/client-contacts/:contactId', requirePermission('pmo.client_managers.edit'), async (req, res) => {
+  try {
+    if (!req.org) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+
+    const { id, contactId } = req.params;
+    const { name, email, role, phone, company, projectClientId } = req.body;
+
+    if (!(await requireProjectAccess(req, res, id))) return;
+
+    const existing = await prisma.projectClientContact.findFirst({
+      where: { id: contactId, projectId: id },
+    });
+    if (!existing) {
+      res.status(404).json({ error: 'Client contact not found' });
+      return;
+    }
+
+    let companyVal = company !== undefined ? company : existing.company;
+    if (projectClientId) {
+      const pc = await prisma.projectClient.findFirst({
+        where: { id: projectClientId, projectId: id },
+      });
+      if (pc) companyVal = pc.name;
+    }
+
+    const contact = await prisma.projectClientContact.update({
+      where: { id: contactId },
+      data: {
+        ...(name !== undefined && { name }),
+        ...(email !== undefined && { email: email || null }),
+        ...(role !== undefined && { role: role || null }),
+        ...(phone !== undefined && { phone: phone || null }),
+        ...(companyVal !== undefined && { company: companyVal }),
+        ...(projectClientId !== undefined && { projectClientId: projectClientId || null }),
+      },
+    });
+
+    res.json(contact);
+  } catch (error) {
+    console.error('Error updating project client contact:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 // DELETE /api/pmo/projects/:id/client-contacts/:contactId
 router.delete('/projects/:id/client-contacts/:contactId', requirePermission('pmo.client_managers.delete'), async (req, res) => {
   try {
@@ -938,6 +1028,29 @@ router.delete('/projects/:id/client-contacts/:contactId', requirePermission('pmo
 // ============================================
 // DELIVERABLES
 // ============================================
+
+// GET /api/pmo/projects/:id/deliverable-budget-summary
+router.get(
+  '/projects/:id/deliverable-budget-summary',
+  requirePermission('pmo.deliverables.view'),
+  async (req, res) => {
+    try {
+      if (!req.org) {
+        res.status(401).json({ error: 'Unauthorized' });
+        return;
+      }
+
+      const { id } = req.params;
+      if (!(await requireProjectAccess(req, res, id))) return;
+
+      const summary = await getDeliverableBudgetSummary(id);
+      res.json(summary);
+    } catch (error) {
+      console.error('Error fetching deliverable budget summary:', error);
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  }
+);
 
 // GET /api/pmo/projects/:id/deliverables
 router.get('/projects/:id/deliverables', requirePermission('pmo.deliverables.view'), async (req, res) => {
@@ -976,7 +1089,18 @@ router.post('/projects/:id/deliverables', requirePermission('pmo.deliverables.cr
     }
 
     const { id } = req.params;
-    const { name, description, status, priority, dueDate, assignedTo, assignedType, notes } = req.body;
+    const {
+      name,
+      description,
+      status,
+      priority,
+      dueDate,
+      assignedTo,
+      assignedType,
+      notes,
+      quantity,
+      unitCostCents,
+    } = req.body;
 
     if (!name) {
       res.status(400).json({ error: 'Deliverable name is required' });
@@ -984,6 +1108,17 @@ router.post('/projects/:id/deliverables', requirePermission('pmo.deliverables.cr
     }
 
     if (!(await requireProjectAccess(req, res, id))) return;
+
+    const costCheck = await validateDeliverableCost(id, quantity, unitCostCents);
+    if (!costCheck.ok) {
+      res.status(400).json({
+        error: costCheck.error,
+        remainingCents: costCheck.remainingCents,
+        projectBudgetCents: costCheck.projectBudgetCents,
+        totalCostCents: costCheck.totalCostCents,
+      });
+      return;
+    }
 
     const deliverable = await prisma.deliverable.create({
       data: {
@@ -996,6 +1131,9 @@ router.post('/projects/:id/deliverables', requirePermission('pmo.deliverables.cr
         assignedTo: assignedTo || null,
         assignedType: assignedType || null,
         notes: notes || null,
+        quantity: Math.max(1, Math.floor(Number(quantity)) || 1),
+        unitCostCents: Math.max(0, Math.floor(Number(unitCostCents)) || 0),
+        totalCostCents: costCheck.totalCostCents,
       },
     });
 
@@ -1015,7 +1153,19 @@ router.put('/deliverables/:id', requirePermission('pmo.deliverables.edit'), asyn
     }
 
     const { id } = req.params;
-    const { name, description, status, priority, dueDate, assignedTo, assignedType, notes, completedAt } = req.body;
+    const {
+      name,
+      description,
+      status,
+      priority,
+      dueDate,
+      assignedTo,
+      assignedType,
+      notes,
+      completedAt,
+      quantity,
+      unitCostCents,
+    } = req.body;
 
     const deliverable = await prisma.deliverable.findFirst({
       where: { id },
@@ -1026,6 +1176,26 @@ router.put('/deliverables/:id', requirePermission('pmo.deliverables.edit'), asyn
 
     if (!deliverable || deliverable.project.orgId !== req.org.id) {
       res.status(404).json({ error: 'Deliverable not found' });
+      return;
+    }
+
+    const nextQuantity = quantity !== undefined ? quantity : deliverable.quantity;
+    const nextUnitCost =
+      unitCostCents !== undefined ? unitCostCents : deliverable.unitCostCents;
+
+    const costCheck = await validateDeliverableCost(
+      deliverable.projectId,
+      nextQuantity,
+      nextUnitCost,
+      id
+    );
+    if (!costCheck.ok) {
+      res.status(400).json({
+        error: costCheck.error,
+        remainingCents: costCheck.remainingCents,
+        projectBudgetCents: costCheck.projectBudgetCents,
+        totalCostCents: costCheck.totalCostCents,
+      });
       return;
     }
 
@@ -1041,6 +1211,11 @@ router.put('/deliverables/:id', requirePermission('pmo.deliverables.edit'), asyn
         ...(assignedType !== undefined && { assignedType }),
         ...(notes !== undefined && { notes }),
         ...(completedAt !== undefined && { completedAt: completedAt ? new Date(completedAt) : null }),
+        ...(quantity !== undefined && { quantity: Math.max(1, Math.floor(Number(quantity)) || 1) }),
+        ...(unitCostCents !== undefined && {
+          unitCostCents: Math.max(0, Math.floor(Number(unitCostCents)) || 0),
+        }),
+        totalCostCents: costCheck.totalCostCents,
       },
     });
 
@@ -1158,6 +1333,8 @@ router.post('/projects/:id/budget', requirePermission('pmo.budget.create'), asyn
       },
     });
 
+    await syncProjectBudgetTotals(id);
+
     res.status(201).json(budget);
   } catch (error) {
     console.error('Error creating budget:', error);
@@ -1200,6 +1377,8 @@ router.put('/budget/:id', requirePermission('pmo.budget.edit'), async (req, res)
       },
     });
 
+    await syncProjectBudgetTotals(budget.projectId);
+
     res.json(updated);
   } catch (error) {
     console.error('Error updating budget:', error);
@@ -1232,6 +1411,8 @@ router.delete('/budget/:id', requirePermission('pmo.budget.delete'), async (req,
     await prisma.budget.delete({
       where: { id },
     });
+
+    await syncProjectBudgetTotals(budget.projectId);
 
     res.json({ message: 'Budget deleted successfully' });
   } catch (error) {

@@ -15,7 +15,7 @@ async function main() {
       key: 'hr',
       name: 'HR & Employees',
       description:
-        'Human resources and employee management including attendance, leave, payroll, recruitment, performance reviews, and employee assets (laptops, uniforms, equipment)',
+        'Human resources and employee management including attendance, leave, payroll, recruitment, and performance reviews',
       isActive: true,
     },
   });
@@ -100,23 +100,24 @@ async function main() {
     },
   });
 
-  console.log('✅ Created 8 modules\n');
+  const inventoryModule = await prisma.module.upsert({
+    where: { key: 'inventory' },
+    update: {
+      isActive: true,
+      name: 'Inventory Management',
+      description:
+        'Stock and asset inventory: items, categories, assignments, returns, damages, and swaps (independent from HR module)',
+    },
+    create: {
+      key: 'inventory',
+      name: 'Inventory Management',
+      description:
+        'Stock and asset inventory: items, categories, assignments, returns, damages, and swaps (independent from HR module)',
+      isActive: true,
+    },
+  });
 
-  // Retire standalone inventory module (employee assets live under HR)
-  const legacyInventory = await prisma.module.findUnique({ where: { key: 'inventory' } });
-  if (legacyInventory) {
-    await prisma.orgModule.deleteMany({ where: { moduleId: legacyInventory.id } });
-    await prisma.bundleModule.deleteMany({ where: { moduleId: legacyInventory.id } });
-    await prisma.modulePrice.deleteMany({ where: { moduleId: legacyInventory.id } });
-    await prisma.subscription.deleteMany({ where: { moduleId: legacyInventory.id } });
-    await prisma.module.update({
-      where: { key: 'inventory' },
-      data: {
-        isActive: false,
-        description: 'Retired — employee assets are managed under the HR module',
-      },
-    });
-  }
+  console.log('✅ Created 9 modules\n');
 
   // ============================================
   // CREATE ROLES
@@ -324,6 +325,26 @@ async function main() {
     },
   });
 
+  const inventoryManagerRole = await prisma.role.upsert({
+    where: { key: 'inventory.manager' },
+    update: {},
+    create: {
+      key: 'inventory.manager',
+      name: 'Inventory Manager',
+      description: 'Full access to inventory module',
+    },
+  });
+
+  const inventoryViewerRole = await prisma.role.upsert({
+    where: { key: 'inventory.viewer' },
+    update: {},
+    create: {
+      key: 'inventory.viewer',
+      name: 'Inventory Viewer',
+      description: 'Read-only access to inventory',
+    },
+  });
+
   await prisma.role.upsert({
     where: { key: 'membership.member' },
     update: {
@@ -453,6 +474,7 @@ async function main() {
     { key: 'pmo.issues.delete', name: 'Delete Issues' },
     { key: 'pmo.client_managers.view', name: 'View Client Managers' },
     { key: 'pmo.client_managers.create', name: 'Create Client Managers' },
+    { key: 'pmo.client_managers.edit', name: 'Edit Client Managers' },
     { key: 'pmo.client_managers.delete', name: 'Delete Client Managers' },
     { key: 'pmo.tasks.view', name: 'View Project Tasks' },
     { key: 'pmo.tasks.create', name: 'Create Project Tasks' },
@@ -513,6 +535,27 @@ async function main() {
     { key: 'membership.messages.create', name: 'Create Messages' },
     { key: 'membership.messages.edit', name: 'Edit Messages' },
     { key: 'membership.messages.delete', name: 'Delete Messages' },
+    // Inventory module (independent from HR)
+    { key: 'inventory.items.view', name: 'View Inventory Items' },
+    { key: 'inventory.items.create', name: 'Create Inventory Items' },
+    { key: 'inventory.items.edit', name: 'Edit Inventory Items' },
+    { key: 'inventory.items.delete', name: 'Delete Inventory Items' },
+    { key: 'inventory.categories.view', name: 'View Inventory Categories' },
+    { key: 'inventory.categories.create', name: 'Create Inventory Categories' },
+    { key: 'inventory.categories.edit', name: 'Edit Inventory Categories' },
+    { key: 'inventory.categories.delete', name: 'Delete Inventory Categories' },
+    { key: 'inventory.assignments.view', name: 'View Inventory Assignments' },
+    { key: 'inventory.assignments.create', name: 'Create Inventory Assignments' },
+    { key: 'inventory.assignments.edit', name: 'Edit Inventory Assignments' },
+    { key: 'inventory.assignments.approve', name: 'Approve Inventory Assignments' },
+    { key: 'inventory.returns.view', name: 'View Inventory Returns' },
+    { key: 'inventory.returns.create', name: 'Create Inventory Returns' },
+    { key: 'inventory.damages.view', name: 'View Inventory Damages' },
+    { key: 'inventory.damages.create', name: 'Create Inventory Damage Records' },
+    { key: 'inventory.damages.review', name: 'Review Inventory Damages' },
+    { key: 'inventory.swaps.view', name: 'View Inventory Swaps' },
+    { key: 'inventory.swaps.create', name: 'Create Inventory Swaps' },
+    { key: 'inventory.swaps.approve', name: 'Approve Inventory Swaps' },
   ];
 
   const createdPermissions: { id: string; key: string }[] = [];
@@ -590,6 +633,7 @@ async function main() {
   await assignModulePermissions(documentsManagerRole, 'documents.');
   await assignModulePermissions(salesManagerRole, 'sales.');
   await assignModulePermissions(membershipManagerRole, 'membership.');
+  await assignModulePermissions(inventoryManagerRole, 'inventory.');
 
   // View-only roles: assign all *.view permissions per module to viewer roles
   const hrViewPerms = createdPermissions.filter((p) => p.key.startsWith('hr.') && p.key.endsWith('.view'));
@@ -662,14 +706,16 @@ async function main() {
     });
   }
 
-  // Marketplace, PMO viewers
+  // Marketplace, PMO, Inventory viewers
   const viewOnlyPerms = createdPermissions.filter((p) =>
-    (p.key.startsWith('marketplace.') || p.key.startsWith('pmo.')) && p.key.endsWith('.view')
+    (p.key.startsWith('marketplace.') || p.key.startsWith('pmo.') || p.key.startsWith('inventory.')) &&
+    p.key.endsWith('.view')
   );
   for (const perm of viewOnlyPerms) {
     let roleId = null;
     if (perm.key.startsWith('marketplace.')) roleId = marketplaceViewerRole.id;
     if (perm.key.startsWith('pmo.')) roleId = pmoViewerRole.id;
+    if (perm.key.startsWith('inventory.')) roleId = inventoryViewerRole.id;
 
     if (roleId) {
       await prisma.rolePermission.upsert({
@@ -924,6 +970,7 @@ async function main() {
   await seedModulePrices(salesModule, 19900, 199000, 39900, 399000); // Sales: Pro 199/month, Ultra 399/month
   await seedModulePrices(membershipModule, 9900, 99000, 19900, 199000); // Membership: Pro 99/month, Ultra 199/month
   await seedModulePrices(billingModule, 0, 0, 0, 0); // Billing: Free for all plans
+  await seedModulePrices(inventoryModule, 9900, 99000, 19900, 199000); // Inventory: Pro 99/month, Ultra 199/month
 
   console.log('✅ Created module prices (Basic: 3 users free, Pro: 10 users paid, Ultra: unlimited paid)\n');
 
@@ -1002,6 +1049,7 @@ async function main() {
     { bundle: businessBundle, module: hrModule, plan: 'pro' },
     { bundle: businessBundle, module: ticketingModule, plan: 'pro' },
     { bundle: businessBundle, module: marketplaceModule, plan: 'pro' },
+    { bundle: businessBundle, module: inventoryModule, plan: 'pro' },
     { bundle: enterpriseBundle, module: hrModule, plan: 'ultra' },
     { bundle: enterpriseBundle, module: ticketingModule, plan: 'ultra' },
     { bundle: enterpriseBundle, module: marketplaceModule, plan: 'ultra' },
@@ -1009,6 +1057,7 @@ async function main() {
     { bundle: enterpriseBundle, module: documentsModule, plan: 'ultra' },
     { bundle: enterpriseBundle, module: salesModule, plan: 'ultra' },
     { bundle: enterpriseBundle, module: membershipModule, plan: 'ultra' },
+    { bundle: enterpriseBundle, module: inventoryModule, plan: 'ultra' },
   ];
 
   for (const link of bundleModuleLinks) {
@@ -1112,6 +1161,7 @@ async function main() {
     documentsModule,
     salesModule,
     membershipModule,
+    inventoryModule,
   ];
   const trialEndsAt = new Date();
   trialEndsAt.setDate(trialEndsAt.getDate() + 7); // 1-week trial

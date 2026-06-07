@@ -378,16 +378,6 @@ export const hrManifest: ModuleManifest = {
       permission: 'hr.decisions.view',
     },
     {
-      path: '/hr/assets',
-      label: 'Assets',
-      permission: 'hr.assets.view',
-    },
-    {
-      path: '/hr/assets/categories',
-      label: 'Asset categories',
-      permission: 'hr.assets.categories.view',
-    },
-    {
       path: '/hr/announcements',
       label: 'Announcements',
       permission: 'hr.announcements.view',

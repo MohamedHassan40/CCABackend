@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import prisma from '../../core/db';
 import { requirePermission } from '../../middleware/permissions';
+import { createNotification, createNotificationForOrgWithPermission } from '../../core/notifications/helper';
 import {
   getProjectListWhere,
   getProjectWithAccess,
@@ -190,7 +191,16 @@ router.post('/projects/:projectId/tasks', async (req: Request, res: Response) =>
       include: taskInclude,
     });
 
-    res.status(201).json(task);
+    if (result.access === 'client') {
+      createNotificationForOrgWithPermission(result.project.orgId, 'pmo.tasks.view', {
+        type: 'info',
+        title: 'New client task submitted',
+        message: `"${task.title}" was submitted on project ${result.project.name}`,
+        link: `/pmo/projects/${projectId}?tab=tasks`,
+      }).catch(() => {});
+    }
+
+    res.status(201).json(sanitizeTaskForAccess(task, result.access));
   } catch (error) {
     console.error('Error creating project task:', error);
     res.status(500).json({ error: 'Internal server error' });
@@ -214,6 +224,18 @@ async function getTaskWithAccess(
   if (!projectAccess) return null;
 
   return { task, access: projectAccess.access };
+}
+
+function sanitizeTaskForAccess<T extends { comments?: Array<{ isInternal?: boolean }>; timeEntries?: unknown[] }>(
+  task: T,
+  access: ProjectAccess
+): T {
+  if (access === 'org') return task;
+  return {
+    ...task,
+    comments: (task.comments || []).filter((c) => !c.isInternal),
+    timeEntries: [],
+  };
 }
 
 // GET /api/pmo/tasks/:taskId
@@ -244,7 +266,10 @@ router.get('/tasks/:taskId', async (req: Request, res: Response) => {
       _sum: { minutes: true },
     });
 
-    res.json({ ...task, totalMinutes: totalMinutes._sum.minutes ?? 0 });
+    res.json({
+      ...sanitizeTaskForAccess(task, result.access),
+      totalMinutes: totalMinutes._sum.minutes ?? 0,
+    });
   } catch (error) {
     console.error('Error fetching task:', error);
     res.status(500).json({ error: 'Internal server error' });
@@ -264,6 +289,8 @@ router.put('/tasks/:taskId', requirePermission('pmo.tasks.edit'), async (req: Re
       res.status(404).json({ error: 'Task not found' });
       return;
     }
+
+    const previousAssigneeId = result.task?.assigneeId;
 
     const {
       title,
@@ -310,6 +337,27 @@ router.put('/tasks/:taskId', requirePermission('pmo.tasks.edit'), async (req: Re
       include: taskInclude,
     });
 
+    if (
+      assigneeId !== undefined &&
+      updated.assigneeId &&
+      updated.assigneeId !== previousAssigneeId
+    ) {
+      const assignee = await prisma.employee.findUnique({
+        where: { id: updated.assigneeId },
+        select: { userId: true, fullName: true },
+      });
+      if (assignee?.userId) {
+        createNotification({
+          userId: assignee.userId,
+          organizationId: req.org!.id,
+          type: 'info',
+          title: 'Task assigned to you',
+          message: `You were assigned to "${updated.title}"`,
+          link: `/pmo/projects/${updated.projectId}?tab=tasks`,
+        }).catch(() => {});
+      }
+    }
+
     res.json(updated);
   } catch (error) {
     console.error('Error updating task:', error);
@@ -354,7 +402,10 @@ router.get('/tasks/:taskId/comments', async (req: Request, res: Response) => {
     }
 
     const comments = await prisma.projectTaskComment.findMany({
-      where: { projectTaskId: taskId },
+      where: {
+        projectTaskId: taskId,
+        ...(result.access === 'client' ? { isInternal: false } : {}),
+      },
       include: {
         user: { select: { id: true, email: true, name: true } },
         clientProjectManager: { select: { id: true, name: true, email: true } },
@@ -427,6 +478,23 @@ router.post('/tasks/:taskId/comments', async (req: Request, res: Response) => {
         clientProjectManager: { select: { id: true, name: true, email: true } },
       },
     });
+
+    if (!isInternalVal && taskForComment.assigneeId) {
+      const assignee = await prisma.employee.findUnique({
+        where: { id: taskForComment.assigneeId },
+        select: { userId: true },
+      });
+      if (assignee?.userId && assignee.userId !== req.user!.id) {
+        createNotification({
+          userId: assignee.userId,
+          organizationId: req.org!.id,
+          type: 'info',
+          title: 'New comment on your task',
+          message: `New comment on "${taskForComment.title}"`,
+          link: `/pmo/projects/${taskForComment.projectId}?tab=tasks`,
+        }).catch(() => {});
+      }
+    }
 
     res.status(201).json(comment);
   } catch (error) {
@@ -512,6 +580,90 @@ router.post('/tasks/:taskId/time-entries', requirePermission('pmo.tasks.edit'), 
     res.status(201).json(entry);
   } catch (error) {
     console.error('Error creating task time entry:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// PUT /api/pmo/tasks/:taskId/time-entries/:entryId (org only)
+router.put('/tasks/:taskId/time-entries/:entryId', requirePermission('pmo.tasks.edit'), async (req: Request, res: Response) => {
+  try {
+    if (!req.user || !req.org) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+    const { taskId, entryId } = req.params;
+    const result = await getTaskWithAccess(req, taskId);
+    if (!result || result.access !== 'org') {
+      res.status(404).json({ error: 'Task not found' });
+      return;
+    }
+
+    const existing = await prisma.projectTaskTimeEntry.findFirst({
+      where: { id: entryId, projectTaskId: taskId, orgId: req.org.id },
+    });
+    if (!existing) {
+      res.status(404).json({ error: 'Time entry not found' });
+      return;
+    }
+
+    const { employeeId, minutes, description, loggedAt } = req.body;
+    const data: Record<string, unknown> = {};
+    if (minutes != null) data.minutes = Number(minutes);
+    if (description !== undefined) data.description = description?.trim() || null;
+    if (loggedAt !== undefined) data.loggedAt = loggedAt ? new Date(loggedAt) : existing.loggedAt;
+    if (employeeId) {
+      const employee = await prisma.employee.findFirst({
+        where: { id: String(employeeId), orgId: req.org.id },
+      });
+      if (!employee) {
+        res.status(400).json({ error: 'Employee not found' });
+        return;
+      }
+      data.employeeId = employee.id;
+    }
+
+    const entry = await prisma.projectTaskTimeEntry.update({
+      where: { id: entryId },
+      data: data as never,
+      include: {
+        employee: { select: { id: true, fullName: true, email: true } },
+        createdBy: { select: { id: true, name: true } },
+      },
+    });
+
+    res.json(entry);
+  } catch (error) {
+    console.error('Error updating task time entry:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// DELETE /api/pmo/tasks/:taskId/time-entries/:entryId (org only)
+router.delete('/tasks/:taskId/time-entries/:entryId', requirePermission('pmo.tasks.edit'), async (req: Request, res: Response) => {
+  try {
+    if (!req.user || !req.org) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+    const { taskId, entryId } = req.params;
+    const result = await getTaskWithAccess(req, taskId);
+    if (!result || result.access !== 'org') {
+      res.status(404).json({ error: 'Task not found' });
+      return;
+    }
+
+    const existing = await prisma.projectTaskTimeEntry.findFirst({
+      where: { id: entryId, projectTaskId: taskId, orgId: req.org.id },
+    });
+    if (!existing) {
+      res.status(404).json({ error: 'Time entry not found' });
+      return;
+    }
+
+    await prisma.projectTaskTimeEntry.delete({ where: { id: entryId } });
+    res.json({ message: 'Time entry deleted' });
+  } catch (error) {
+    console.error('Error deleting task time entry:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 });

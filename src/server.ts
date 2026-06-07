@@ -28,6 +28,7 @@ import { handleSubscriptionPaymentCallback } from './core/payments/subscription-
 import { handleMembershipPaymentCallback } from './core/payments/membership-payment-callback';
 import { registerMarketplaceModule } from './modules/marketplace';
 import { registerPmoModule } from './modules/pmo';
+import { registerInventoryModule } from './modules/inventory';
 import { registerDocumentsModule } from './modules/documents';
 import { registerSalesModule } from './modules/sales';
 import { registerMembershipModule } from './modules/membership';
@@ -149,6 +150,7 @@ registerSubscriptionsModule(mainRouter);
 registerBillingModule(mainRouter);
 registerMarketplaceModule(mainRouter);
 registerPmoModule(mainRouter);
+registerInventoryModule(mainRouter);
 registerDocumentsModule(mainRouter);
 registerSalesModule(mainRouter);
 registerMembershipModule(mainRouter);

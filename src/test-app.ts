@@ -22,6 +22,8 @@ import { registerTicketingModule } from './modules/ticketing';
 import { registerBillingModule } from './modules/billing';
 import { registerSubscriptionsModule } from './modules/subscriptions';
 import { registerMarketplaceModule } from './modules/marketplace';
+import { registerPmoModule } from './modules/pmo';
+import { registerInventoryModule } from './modules/inventory';
 import { securityHeaders } from './middleware/security';
 
 // Create app without starting server
@@ -62,6 +64,8 @@ registerTicketingModule(mainRouter);
 registerSubscriptionsModule(mainRouter);
 registerBillingModule(mainRouter);
 registerMarketplaceModule(mainRouter);
+registerPmoModule(mainRouter);
+registerInventoryModule(mainRouter);
 app.use(mainRouter);
 
 // Error handler
