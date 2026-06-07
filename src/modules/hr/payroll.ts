@@ -496,6 +496,89 @@ router.put('/:id/approve', requirePermission('hr.payroll.approve'), async (req, 
   }
 });
 
+// PUT /api/hr/payroll/:id/mark-paid - Mark approved payroll as paid
+router.put('/:id/mark-paid', requirePermission('hr.payroll.approve'), async (req, res) => {
+  try {
+    if (!req.org) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+
+    const { id } = req.params;
+
+    const payrollRecord = await prisma.payrollRecord.findFirst({
+      where: {
+        id,
+        orgId: req.org.id,
+        status: 'approved',
+      },
+      include: { employee: { select: { id: true, fullName: true, email: true, userId: true } } },
+    });
+
+    if (!payrollRecord) {
+      res.status(404).json({ error: 'Payroll record not found or not ready to mark as paid' });
+      return;
+    }
+
+    const updated = await prisma.payrollRecord.update({
+      where: { id },
+      data: {
+        status: 'paid',
+        paidAt: new Date(),
+      },
+      include: {
+        employee: {
+          select: {
+            id: true,
+            fullName: true,
+            email: true,
+          },
+        },
+      },
+    });
+
+    if (payrollRecord.employee.userId) {
+      createNotification({
+        userId: payrollRecord.employee.userId,
+        organizationId: req.org.id,
+        type: 'success',
+        title: 'Payroll paid',
+        message: 'Your payroll has been marked as paid.',
+        link: '/dashboard/hr/payroll',
+      }).catch(() => {});
+    }
+
+    if (payrollRecord.employee.email) {
+      const { sendEmailQueued } = await import('../../core/email');
+      const { payrollPaidEmail } = await import('../../core/email/operationalEmails');
+      const { getOrgEmailBrand } = await import('../../core/auth/magicLink');
+      const brand = await getOrgEmailBrand(req.org.id, 'hr');
+      const periodLabel = `${payrollRecord.payPeriodStart.toISOString().slice(0, 10)} – ${payrollRecord.payPeriodEnd.toISOString().slice(0, 10)}`;
+      const tpl = payrollPaidEmail({
+        employeeName: payrollRecord.employee.fullName,
+        periodLabel,
+        brand,
+      });
+      sendEmailQueued({ to: payrollRecord.employee.email, subject: tpl.subject, html: tpl.html, priority: 'normal' }).catch(() => {});
+    }
+
+    createAuditLog({
+      userId: req.user?.id ?? null,
+      organizationId: req.org.id,
+      action: 'mark_paid',
+      resourceType: 'payroll_record',
+      resourceId: id,
+      details: { payrollRecordId: id, employeeId: payrollRecord.employee.id },
+      req,
+    }).catch(() => {});
+
+    res.json(updated);
+  } catch (error) {
+    console.error('Error marking payroll as paid:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 // GET /api/hr/payroll/reports - Get payroll reports
 router.get('/reports', requirePermission('hr.payroll.view'), async (req, res) => {
   try {

@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import prisma from '../../core/db';
-import { requirePermission } from '../../middleware/permissions';
+import { requirePermission, requireAnyPermission } from '../../middleware/permissions';
 import { createNotification } from '../../core/notifications/helper';
 import { submitLeaveRequestForEmployee } from './leaveRequestSubmit';
 import { createAuditLog } from '../../middleware/audit';
@@ -540,7 +540,7 @@ router.put('/requests/:id/reject', requirePermission('hr.leave.approve'), async 
 });
 
 // PUT /api/hr/leave/requests/:id/cancel - Cancel leave request (pending or approved; refund balance if approved)
-router.put('/requests/:id/cancel', requirePermission('hr.leave.create'), async (req, res) => {
+router.put('/requests/:id/cancel', requireAnyPermission('hr.leave.create', 'hr.leave.approve'), async (req, res) => {
   try {
     if (!req.org) {
       res.status(401).json({ error: 'Unauthorized' });
