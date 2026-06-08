@@ -108,7 +108,8 @@ describe('HR Module - Employees', () => {
       const response = await api.get('/api/hr/employees');
       
       expect(response.status).toBe(200);
-      expect(response.body).toEqual([]);
+      expect(response.body.data).toEqual([]);
+      expect(response.body.total).toBe(0);
     });
 
     it('should return employees for the organization', async () => {
@@ -145,9 +146,9 @@ describe('HR Module - Employees', () => {
       const response = await api.get('/api/hr/employees');
       
       expect(response.status).toBe(200);
-      expect(response.body).toHaveLength(2);
-      expect(response.body[0].fullName).toBe(employee2.fullName); // Ordered by createdAt desc
-      expect(response.body[1].fullName).toBe(employee1.fullName);
+      expect(response.body.data).toHaveLength(2);
+      expect(response.body.data[0].fullName).toBe(employee2.fullName); // Ordered by createdAt desc
+      expect(response.body.data[1].fullName).toBe(employee1.fullName);
     });
 
     it('should require authentication', async () => {

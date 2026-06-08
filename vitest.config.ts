@@ -23,7 +23,7 @@ export default defineConfig({
     },
     testTimeout: 30000,
     hookTimeout: 30000,
-    setupFiles: ['./tests/setup.ts'],
+    setupFiles: ['./tests/load-test-env.ts', './tests/setup.ts'],
     exclude: ['tests/unit/**'],
   },
   resolve: {

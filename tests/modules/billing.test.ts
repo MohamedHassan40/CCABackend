@@ -84,7 +84,7 @@ describe('Platform subscriptions API', () => {
         },
       });
 
-      const response = await api.get('/api/subscriptions/subscriptions');
+      const response = await api.get('/api/subscriptions');
 
       expect(response.status).toBe(200);
       expect(response.body).toHaveProperty('subscriptions');

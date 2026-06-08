@@ -8,8 +8,16 @@ This directory contains all backend tests for the cloud organization system.
 # Install dependencies (if not already done)
 npm install
 
-# Run all tests
+# One-time: local test database (Docker must be running)
+cp .env.test.example .env.test   # Windows: copy .env.test.example .env.test
+npm run db:test:setup            # uses existing cloud_org_db on 5433 if running, else starts port 5434
+
+# Run all integration/module tests
 npm test
+
+# Run inventory tests only
+npm run test:inventory
+```
 
 # Run tests in watch mode
 npm run test:watch
@@ -216,6 +224,15 @@ test: {
 ```
 
 ### Database connection errors
+
+Module/integration tests use **`.env.test`**, not your dev `.env` (so Railway/production credentials are not used by default).
+
+1. Copy `cca_backend/.env.test.example` → `cca_backend/.env.test`
+2. Start **Docker Desktop**
+3. Run `npm run db:test:setup` (starts Postgres on port **5433** and runs migrations)
+4. Run `npm run test:inventory` or `npm test`
+
+If you prefer Railway for tests, paste a valid `DATABASE_URL` into `.env.test` (use a **dedicated test database**, not production — tests wipe org/user data between runs).
 
 Ensure:
 - Database is running

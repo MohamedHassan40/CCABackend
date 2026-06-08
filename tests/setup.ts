@@ -4,8 +4,19 @@ import { cleanDatabase } from './utils/database';
 
 // Clean database before all tests
 beforeAll(async () => {
-  // Ensure database connection
-  await prisma.$connect();
+  try {
+    await prisma.$connect();
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(
+      '\n[tests] Database connection failed.\n' +
+        '  1. Copy .env.test.example to .env.test\n' +
+        '  2. Start Docker Desktop, then: npm run db:test:setup\n' +
+        '  Or set DATABASE_URL in .env.test to a reachable Postgres instance.\n' +
+        `  Error: ${message}\n`
+    );
+    throw error;
+  }
   // Initial clean
   await cleanDatabase();
 });

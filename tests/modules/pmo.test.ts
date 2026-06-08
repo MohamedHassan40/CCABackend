@@ -41,8 +41,8 @@ async function ensurePmoPermissions(ownerRoleId: string) {
 
 describe('PMO Module', () => {
   let api: ApiClient;
-  let user: any;
-  let org: any;
+  let user: { id: string };
+  let org: { id: string };
 
   beforeEach(async () => {
     api = new ApiClient();
@@ -64,56 +64,56 @@ describe('PMO Module', () => {
     it('returns empty array when no projects exist', async () => {
       const response = await api.get('/api/pmo/projects');
       expect(response.status).toBe(200);
-      expect(response.data).toEqual([]);
+      expect(response.body).toEqual([]);
     });
   });
 
   describe('POST /api/pmo/projects', () => {
     it('creates a project with a portal token', async () => {
-      const response = await api.post('/api/pmo/projects', {
+      const response = await api.post('/api/pmo/projects').send({
         name: 'Test Project Alpha',
         status: 'planning',
       });
       expect(response.status).toBe(201);
-      expect(response.data.name).toBe('Test Project Alpha');
-      expect(response.data.portalToken).toBeTruthy();
+      expect(response.body.name).toBe('Test Project Alpha');
+      expect(response.body.portalToken).toBeTruthy();
     });
   });
 
   describe('POST /api/pmo/projects/:id/regenerate-portal-token', () => {
     it('regenerates the portal token', async () => {
-      const created = await api.post('/api/pmo/projects', { name: 'Token Project' });
-      const projectId = created.data.id;
-      const oldToken = created.data.portalToken;
+      const created = await api.post('/api/pmo/projects').send({ name: 'Token Project' });
+      const projectId = created.body.id;
+      const oldToken = created.body.portalToken;
 
-      const response = await api.post(`/api/pmo/projects/${projectId}/regenerate-portal-token`, {});
+      const response = await api.post(`/api/pmo/projects/${projectId}/regenerate-portal-token`).send({});
       expect(response.status).toBe(200);
-      expect(response.data.portalToken).toBeTruthy();
-      expect(response.data.portalToken).not.toBe(oldToken);
+      expect(response.body.portalToken).toBeTruthy();
+      expect(response.body.portalToken).not.toBe(oldToken);
     });
   });
 
   describe('Budget sync', () => {
     it('rolls budget line totals to project after creating budget items', async () => {
-      const created = await api.post('/api/pmo/projects', { name: 'Budget Project' });
-      const projectId = created.data.id;
+      const created = await api.post('/api/pmo/projects').send({ name: 'Budget Project' });
+      const projectId = created.body.id;
 
-      const labor = await api.post(`/api/pmo/projects/${projectId}/budget`, {
+      const labor = await api.post(`/api/pmo/projects/${projectId}/budget`).send({
         category: 'labor',
         budgetedCents: 100000,
       });
-      await api.put(`/api/pmo/budget/${labor.data.id}`, { spentCents: 25000 });
+      await api.put(`/api/pmo/budget/${labor.body.id}`).send({ spentCents: 25000 });
 
-      const materials = await api.post(`/api/pmo/projects/${projectId}/budget`, {
+      const materials = await api.post(`/api/pmo/projects/${projectId}/budget`).send({
         category: 'materials',
         budgetedCents: 50000,
       });
-      await api.put(`/api/pmo/budget/${materials.data.id}`, { spentCents: 10000 });
+      await api.put(`/api/pmo/budget/${materials.body.id}`).send({ spentCents: 10000 });
 
       const project = await api.get(`/api/pmo/projects/${projectId}`);
       expect(project.status).toBe(200);
-      expect(project.data.budgetCents).toBe(150000);
-      expect(project.data.spentCents).toBe(35000);
+      expect(project.body.budgetCents).toBe(150000);
+      expect(project.body.spentCents).toBe(35000);
     });
   });
 });

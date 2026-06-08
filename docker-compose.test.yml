@@ -1,0 +1,15 @@
+services:
+  postgres-test:
+    image: postgres:16-alpine
+    container_name: cca_postgres_test
+    ports:
+      - '5434:5432'
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: cloud_org_test
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U postgres -d cloud_org_test']
+      interval: 2s
+      timeout: 5s
+      retries: 15
