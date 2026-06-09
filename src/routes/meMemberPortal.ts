@@ -447,4 +447,165 @@ router.post('/member-portal/:orgSlug/renew/payment', authMiddleware, async (req:
   }
 });
 
+// GET /api/me/member-portal/:orgSlug/conversations — member's message threads
+router.get('/member-portal/:orgSlug/conversations', authMiddleware, async (req: Request, res: Response) => {
+  try {
+    const orgSlug = String(req.params.orgSlug);
+    const access = await requireMemberAccess(req, res, orgSlug);
+    if (!access) return;
+
+    const conversations = await prisma.conversation.findMany({
+      where: {
+        orgId: access.org.id,
+        memberMembershipId: access.record.id,
+      },
+      include: {
+        messages: { orderBy: { createdAt: 'desc' }, take: 1 },
+        _count: { select: { messages: true } },
+      },
+      orderBy: { lastMessageAt: 'desc' },
+    });
+
+    res.json(conversations);
+  } catch (error) {
+    console.error('GET member-portal conversations:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// GET /api/me/member-portal/:orgSlug/conversations/:id
+router.get('/member-portal/:orgSlug/conversations/:id', authMiddleware, async (req: Request, res: Response) => {
+  try {
+    const orgSlug = String(req.params.orgSlug);
+    const access = await requireMemberAccess(req, res, orgSlug);
+    if (!access) return;
+
+    const conversation = await prisma.conversation.findFirst({
+      where: {
+        id: req.params.id,
+        orgId: access.org.id,
+        memberMembershipId: access.record.id,
+      },
+      include: {
+        messages: { orderBy: { createdAt: 'asc' } },
+      },
+    });
+
+    if (!conversation) {
+      res.status(404).json({ error: 'Conversation not found' });
+      return;
+    }
+
+    res.json(conversation);
+  } catch (error) {
+    console.error('GET member-portal conversation:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// POST /api/me/member-portal/:orgSlug/conversations — start a new thread
+router.post('/member-portal/:orgSlug/conversations', authMiddleware, async (req: Request, res: Response) => {
+  try {
+    const orgSlug = String(req.params.orgSlug);
+    const access = await requireMemberAccess(req, res, orgSlug);
+    if (!access) return;
+
+    const { subject, message } = req.body as { subject?: string; message?: string };
+    if (!message?.trim()) {
+      res.status(400).json({ error: 'Message is required' });
+      return;
+    }
+
+    const membership = access.record;
+    if (membership.status !== 'active' || membership.endDate <= new Date()) {
+      res.status(403).json({ error: 'Active membership required to send messages' });
+      return;
+    }
+
+    const conversation = await prisma.conversation.create({
+      data: {
+        orgId: access.org.id,
+        memberMembershipId: membership.id,
+        memberEmail: membership.memberEmail,
+        memberName: membership.memberName,
+        subject: subject?.trim() || null,
+        lastMessageAt: new Date(),
+      },
+    });
+
+    await prisma.message.create({
+      data: {
+        conversationId: conversation.id,
+        senderEmail: membership.memberEmail,
+        senderName: membership.memberName,
+        senderType: 'member',
+        content: message.trim(),
+      },
+    });
+
+    const full = await prisma.conversation.findUnique({
+      where: { id: conversation.id },
+      include: { messages: { orderBy: { createdAt: 'asc' } } },
+    });
+
+    res.status(201).json(full);
+  } catch (error) {
+    console.error('POST member-portal conversation:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// POST /api/me/member-portal/:orgSlug/conversations/:id/messages
+router.post('/member-portal/:orgSlug/conversations/:id/messages', authMiddleware, async (req: Request, res: Response) => {
+  try {
+    const orgSlug = String(req.params.orgSlug);
+    const access = await requireMemberAccess(req, res, orgSlug);
+    if (!access) return;
+
+    const { content } = req.body as { content?: string };
+    if (!content?.trim()) {
+      res.status(400).json({ error: 'Message content is required' });
+      return;
+    }
+
+    const conversation = await prisma.conversation.findFirst({
+      where: {
+        id: req.params.id,
+        orgId: access.org.id,
+        memberMembershipId: access.record.id,
+      },
+    });
+
+    if (!conversation) {
+      res.status(404).json({ error: 'Conversation not found' });
+      return;
+    }
+
+    if (conversation.status === 'closed' || conversation.status === 'archived') {
+      res.status(400).json({ error: 'This conversation is closed' });
+      return;
+    }
+
+    const message = await prisma.message.create({
+      data: {
+        conversationId: conversation.id,
+        senderEmail: access.record.memberEmail,
+        senderName: access.record.memberName,
+        senderType: 'member',
+        content: content.trim(),
+      },
+    });
+
+    await prisma.conversation.update({
+      where: { id: conversation.id },
+      data: { lastMessageAt: new Date(), status: 'open' },
+    });
+
+    res.status(201).json(message);
+  } catch (error) {
+    console.error('POST member-portal message:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 export default router;

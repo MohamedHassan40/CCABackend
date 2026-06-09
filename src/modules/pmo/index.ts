@@ -19,8 +19,14 @@ import {
   validateDeliverableCost,
 } from './deliverable-budget';
 import { ensureProjectPortalToken } from '../../routes/publicPmo';
+import { registerPmoPhase2Routes } from './stakeholders-charter-reports';
+import { registerPmoPlanningRoutes } from './planning-phase3';
+import { registerPmoPhase4Routes } from './identification-closing-phase4';
 
 const router = Router();
+registerPmoPhase2Routes(router);
+registerPmoPlanningRoutes(router);
+registerPmoPhase4Routes(router);
 
 // Module manifest
 export const pmoManifest: ModuleManifest = {
@@ -28,6 +34,11 @@ export const pmoManifest: ModuleManifest = {
   name: 'PMO Portal',
   icon: 'briefcase',
   sidebarItems: [
+    {
+      path: '/pmo/proposals',
+      label: 'Proposals',
+      permission: 'pmo.projects.view',
+    },
     {
       path: '/pmo/projects',
       label: 'Projects',
@@ -39,6 +50,21 @@ export const pmoManifest: ModuleManifest = {
       permission: 'pmo.deliverables.view',
     },
     {
+      path: '/pmo/wbs',
+      label: 'WBS',
+      permission: 'pmo.deliverables.view',
+    },
+    {
+      path: '/pmo/timeline',
+      label: 'Timeline',
+      permission: 'pmo.projects.view',
+    },
+    {
+      path: '/pmo/raci',
+      label: 'RACI',
+      permission: 'pmo.projects.view',
+    },
+    {
       path: '/pmo/budget',
       label: 'Budget',
       permission: 'pmo.budget.view',
@@ -46,6 +72,11 @@ export const pmoManifest: ModuleManifest = {
     {
       path: '/pmo/risks',
       label: 'Risks',
+      permission: 'pmo.risks.view',
+    },
+    {
+      path: '/pmo/risks/matrix',
+      label: 'Risk matrix',
       permission: 'pmo.risks.view',
     },
     {
@@ -495,6 +526,14 @@ router.delete('/projects/:id/managers/:managerId', requirePermission('pmo.projec
     const { id, managerId } = req.params;
 
     if (!(await requireProjectAccess(req, res, id))) return;
+
+    const manager = await prisma.projectManager.findFirst({
+      where: { id: managerId, projectId: id },
+    });
+    if (!manager) {
+      res.status(404).json({ error: 'Project manager not found' });
+      return;
+    }
 
     await prisma.projectManager.delete({
       where: { id: managerId },
@@ -1095,11 +1134,16 @@ router.post('/projects/:id/deliverables', requirePermission('pmo.deliverables.cr
       status,
       priority,
       dueDate,
+      startDate,
       assignedTo,
       assignedType,
       notes,
       quantity,
       unitCostCents,
+      parentId,
+      wbsCode,
+      sortOrder,
+      estimatedHours,
     } = req.body;
 
     if (!name) {
@@ -1108,6 +1152,16 @@ router.post('/projects/:id/deliverables', requirePermission('pmo.deliverables.cr
     }
 
     if (!(await requireProjectAccess(req, res, id))) return;
+
+    if (parentId) {
+      const parent = await prisma.deliverable.findFirst({
+        where: { id: String(parentId), projectId: id },
+      });
+      if (!parent) {
+        res.status(400).json({ error: 'Parent deliverable not found' });
+        return;
+      }
+    }
 
     const costCheck = await validateDeliverableCost(id, quantity, unitCostCents);
     if (!costCheck.ok) {
@@ -1120,14 +1174,31 @@ router.post('/projects/:id/deliverables', requirePermission('pmo.deliverables.cr
       return;
     }
 
+    let resolvedWbsCode = wbsCode?.trim() || null;
+    if (!resolvedWbsCode) {
+      if (parentId) {
+        const parent = await prisma.deliverable.findUnique({ where: { id: String(parentId) } });
+        const siblingCount = await prisma.deliverable.count({ where: { projectId: id, parentId: String(parentId) } });
+        resolvedWbsCode = parent?.wbsCode ? `${parent.wbsCode}.${siblingCount + 1}` : String(siblingCount + 1);
+      } else {
+        const rootCount = await prisma.deliverable.count({ where: { projectId: id, parentId: null } });
+        resolvedWbsCode = String(rootCount + 1);
+      }
+    }
+
     const deliverable = await prisma.deliverable.create({
       data: {
         projectId: id,
+        parentId: parentId || null,
+        wbsCode: resolvedWbsCode,
+        sortOrder: sortOrder != null ? Number(sortOrder) : 0,
         name,
         description: description || null,
         status: status || 'not_started',
         priority: priority || 'medium',
+        startDate: startDate ? new Date(startDate) : null,
         dueDate: dueDate ? new Date(dueDate) : null,
+        estimatedHours: estimatedHours != null ? Number(estimatedHours) : null,
         assignedTo: assignedTo || null,
         assignedType: assignedType || null,
         notes: notes || null,
@@ -1159,12 +1230,17 @@ router.put('/deliverables/:id', requirePermission('pmo.deliverables.edit'), asyn
       status,
       priority,
       dueDate,
+      startDate,
       assignedTo,
       assignedType,
       notes,
       completedAt,
       quantity,
       unitCostCents,
+      parentId,
+      wbsCode,
+      sortOrder,
+      estimatedHours,
     } = req.body;
 
     const deliverable = await prisma.deliverable.findFirst({
@@ -1199,6 +1275,20 @@ router.put('/deliverables/:id', requirePermission('pmo.deliverables.edit'), asyn
       return;
     }
 
+    if (parentId !== undefined && parentId !== null && parentId !== deliverable.parentId) {
+      if (parentId === id) {
+        res.status(400).json({ error: 'Deliverable cannot be its own parent' });
+        return;
+      }
+      const parent = await prisma.deliverable.findFirst({
+        where: { id: String(parentId), projectId: deliverable.projectId },
+      });
+      if (!parent) {
+        res.status(400).json({ error: 'Parent deliverable not found' });
+        return;
+      }
+    }
+
     const updated = await prisma.deliverable.update({
       where: { id },
       data: {
@@ -1206,6 +1296,7 @@ router.put('/deliverables/:id', requirePermission('pmo.deliverables.edit'), asyn
         ...(description !== undefined && { description }),
         ...(status && { status }),
         ...(priority && { priority }),
+        ...(startDate !== undefined && { startDate: startDate ? new Date(startDate) : null }),
         ...(dueDate !== undefined && { dueDate: dueDate ? new Date(dueDate) : null }),
         ...(assignedTo !== undefined && { assignedTo }),
         ...(assignedType !== undefined && { assignedType }),
@@ -1215,6 +1306,10 @@ router.put('/deliverables/:id', requirePermission('pmo.deliverables.edit'), asyn
         ...(unitCostCents !== undefined && {
           unitCostCents: Math.max(0, Math.floor(Number(unitCostCents)) || 0),
         }),
+        ...(parentId !== undefined && { parentId: parentId || null }),
+        ...(wbsCode !== undefined && { wbsCode: wbsCode?.trim() || null }),
+        ...(sortOrder !== undefined && { sortOrder: Number(sortOrder) }),
+        ...(estimatedHours !== undefined && { estimatedHours: estimatedHours != null ? Number(estimatedHours) : null }),
         totalCostCents: costCheck.totalCostCents,
       },
     });

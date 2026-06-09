@@ -38,7 +38,7 @@ async function emailCanAccessProject(projectId: string, email: string): Promise<
 }
 
 // GET /api/public/pmo/:orgSlug/project-status?projectId=&email=
-router.get('/:orgSlug/project-status', async (req: Request, res: Response) => {
+router.get('/:orgSlug/project-status', publicTicketRateLimiter, async (req: Request, res: Response) => {
   try {
     const org = await resolveOrg(req.params.orgSlug);
     if (!org) {
@@ -100,7 +100,7 @@ router.get('/:orgSlug/project-status', async (req: Request, res: Response) => {
 });
 
 // GET /api/public/pmo/:orgSlug/project-by-token?token=
-router.get('/:orgSlug/project-by-token', async (req: Request, res: Response) => {
+router.get('/:orgSlug/project-by-token', publicTicketRateLimiter, async (req: Request, res: Response) => {
   try {
     const org = await resolveOrg(req.params.orgSlug);
     if (!org) {

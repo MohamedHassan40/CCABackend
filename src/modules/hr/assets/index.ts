@@ -1,3 +1,7 @@
+/**
+ * @deprecated Prefer `/api/inventory/*` and the Inventory module UI.
+ * Legacy HR assets API — kept for backward compatibility only.
+ */
 import { Router } from 'express';
 import prisma from '../../../core/db';
 import { requirePermission } from '../../../middleware/permissions';

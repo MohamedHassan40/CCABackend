@@ -298,9 +298,12 @@ router.put('/tasks/:taskId', requirePermission('pmo.tasks.edit'), async (req: Re
       status,
       priority,
       dueDate,
+      startDate,
       completedAt,
       assigneeId,
       estimatedMinutes,
+      predecessorTaskId,
+      dependencyType,
     } = req.body;
 
     const updateData: Record<string, unknown> = {};
@@ -309,8 +312,29 @@ router.put('/tasks/:taskId', requirePermission('pmo.tasks.edit'), async (req: Re
     if (status !== undefined) updateData.status = status;
     if (priority !== undefined) updateData.priority = priority;
     if (dueDate !== undefined) updateData.dueDate = dueDate ? new Date(dueDate) : null;
+    if (startDate !== undefined) updateData.startDate = startDate ? new Date(startDate) : null;
     if (completedAt !== undefined) updateData.completedAt = completedAt ? new Date(completedAt) : null;
     if (estimatedMinutes !== undefined) updateData.estimatedMinutes = estimatedMinutes ?? null;
+    if (dependencyType !== undefined) updateData.dependencyType = dependencyType || 'FS';
+
+    if (predecessorTaskId !== undefined) {
+      if (predecessorTaskId === null || predecessorTaskId === '') {
+        updateData.predecessorTaskId = null;
+      } else {
+        if (predecessorTaskId === taskId) {
+          res.status(400).json({ error: 'Task cannot depend on itself' });
+          return;
+        }
+        const pred = await prisma.projectTask.findFirst({
+          where: { id: String(predecessorTaskId), projectId: result.task!.projectId },
+        });
+        if (!pred) {
+          res.status(400).json({ error: 'Predecessor task not found' });
+          return;
+        }
+        updateData.predecessorTaskId = pred.id;
+      }
+    }
 
     if (assigneeId !== undefined) {
       if (assigneeId === null || assigneeId === '') {
@@ -512,7 +536,7 @@ router.get('/tasks/:taskId/time-entries', requirePermission('pmo.tasks.view'), a
     }
     const { taskId } = req.params;
     const result = await getTaskWithAccess(req, taskId);
-    if (!result) {
+    if (!result || result.access !== 'org') {
       res.status(404).json({ error: 'Task not found' });
       return;
     }

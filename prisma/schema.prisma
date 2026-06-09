@@ -68,6 +68,8 @@ model User {
   absenceDeductionDecisions AbsenceDeductionDecision[] @relation("DeductionDecisionCreatedBy")
   employeeRequestsCreated   EmployeeRequest[]          @relation("EmployeeRequestCreatedBy")
   employeeRequestsApproved EmployeeRequest[]          @relation("EmployeeRequestApprovedBy")
+  employeeComplaintsCreated EmployeeComplaint[]       @relation("ComplaintCreatedBy")
+  employeeComplaintsResolved EmployeeComplaint[]      @relation("ComplaintResolvedBy")
   magicLoginTokens         MagicLoginToken[]
 
   createdAt DateTime @default(now())
@@ -144,6 +146,7 @@ model Organization {
   InventoryDamage     InventoryDamage[]
   InventorySwap       InventorySwap[]
   projects            Project[]
+  projectProposals    ProjectProposal[]
   documents           Document[]
   documentFolders     DocumentFolder[]
   documentCategories  DocumentCategory[]
@@ -163,6 +166,7 @@ model Organization {
   calendarEvents        CalendarEvent[]
   absenceDeductionDecisions AbsenceDeductionDecision[]
   employeeRequests      EmployeeRequest[]
+  employeeComplaints    EmployeeComplaint[]
   projectTasks          ProjectTask[]
   projectTaskTimeEntries ProjectTaskTimeEntry[]
   departments           Department[]
@@ -486,6 +490,7 @@ model Employee {
   calendarEvents       CalendarEvent[]
   absenceDeductionDecisions AbsenceDeductionDecision[]
   employeeRequests         EmployeeRequest[]
+  complaints               EmployeeComplaint[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -495,6 +500,36 @@ model Employee {
   @@index([userId])
   @@index([departmentId])
   @@index([reportsToId])
+}
+
+model EmployeeComplaint {
+  id           String    @id @default(cuid())
+  orgId        String
+  employeeId   String
+  title        String
+  description  String
+  category     String?
+  priority     String    @default("medium") // low, medium, high, urgent
+  status       String    @default("open") // open, investigating, resolved, closed, dismissed
+  isAnonymous  Boolean   @default(false)
+  resolution   String?
+  resolvedAt   DateTime?
+  createdById  String?
+  resolvedById String?
+
+  organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  employee     Employee     @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  createdBy    User?        @relation("ComplaintCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  resolvedBy   User?        @relation("ComplaintResolvedBy", fields: [resolvedById], references: [id], onDelete: SetNull)
+  attachments  File[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([orgId])
+  @@index([employeeId])
+  @@index([status])
+  @@index([priority])
 }
 
 // HR Decisions - Absence/Delay Deduction
@@ -1175,6 +1210,7 @@ model File {
   folderId        String? // For document management folders
   documentId      String? // For document management (main document record)
   employeeRequestId String? // HR employee request attachments
+  employeeComplaintId String? // HR complaint attachments
   isVersion       Boolean @default(false) // If this is a version of a document
   versionNumber   Int? // Version number
   parentVersionId String? // Parent version ID for document versions
@@ -1188,6 +1224,7 @@ model File {
   documentFolder   DocumentFolder?   @relation("FolderFiles", fields: [folderId], references: [id], onDelete: SetNull)
   document         Document?         @relation("DocumentFiles", fields: [documentId], references: [id], onDelete: Cascade)
   employeeRequest  EmployeeRequest? @relation(fields: [employeeRequestId], references: [id], onDelete: Cascade)
+  employeeComplaint EmployeeComplaint? @relation(fields: [employeeComplaintId], references: [id], onDelete: Cascade)
   parentVersion    File?             @relation("DocumentVersions", fields: [parentVersionId], references: [id], onDelete: Cascade)
   versions         File[]            @relation("DocumentVersions")
 
@@ -1203,6 +1240,7 @@ model File {
   @@index([folderId])
   @@index([documentId])
   @@index([employeeRequestId])
+  @@index([employeeComplaintId])
 }
 
 // ============================================
@@ -1421,6 +1459,8 @@ model Project {
   currency        String    @default("SAR")
   spentCents      Int       @default(0) // Amount spent so far
   notes           String?
+  budgetAlert90SentAt  DateTime? // Last 90% budget alert sent (dedup)
+  budgetAlert100SentAt DateTime? // Last 100% budget alert sent (dedup)
   portalToken     String?   @unique // Public client status portal token
 
   organization          Organization           @relation(fields: [orgId], references: [id], onDelete: Cascade)
@@ -1435,6 +1475,13 @@ model Project {
   tasks                 ProjectTask[]
   clientContacts        ProjectClientContact[]
   projectClients        ProjectClient[]
+  stakeholders          ProjectStakeholder[]
+  charter               ProjectCharter?
+  raciEntries           ProjectRaciEntry[]
+  plans                 ProjectPlan[]
+  proposal              ProjectProposal?
+  lessonsLearned        ProjectLessonLearned[]
+  closure               ProjectClosure?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -1443,6 +1490,122 @@ model Project {
   @@index([status])
   @@index([priority])
   @@index([startDate, endDate])
+}
+
+model ProjectProposal {
+  id               String    @id @default(cuid())
+  orgId            String
+  title            String
+  description      String?
+  status           String    @default("draft") // draft, submitted, approved, rejected
+  problemStatement String?
+  objectives       String?
+  budgetEstimateCents Int?
+  currency         String    @default("SAR")
+  startDate        DateTime?
+  endDate          DateTime?
+  logicalFramework Json? // goal, outcomes, outputs, activities, indicators, assumptions
+  problemTree      Json? // nested problem/objective tree
+  dataCollectionPlan Json? // M&E indicators checklist
+  projectId        String?   @unique
+  submittedAt      DateTime?
+  approvedAt       DateTime?
+  rejectedAt       DateTime?
+  rejectionReason  String?
+  createdById      String?
+  notes            String?
+
+  organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  project        Project?     @relation(fields: [projectId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([orgId])
+  @@index([status])
+}
+
+model ProjectLessonLearned {
+  id             String  @id @default(cuid())
+  projectId      String
+  category       String  @default("other") // technical, process, stakeholder, budget, other
+  description    String
+  recommendation String?
+  authorName     String?
+  authorId       String?
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([projectId])
+  @@index([category])
+}
+
+model ProjectClosure {
+  id                     String    @id @default(cuid())
+  projectId              String    @unique
+  closureStatus          String    @default("in_progress") // in_progress, pending_approval, approved
+  finalReport            String?
+  lessonsSummary         String?
+  certificateNumber      String?
+  certificateGeneratedAt DateTime?
+  approvedBy             String?
+  approvedAt             DateTime?
+  checklist              Json? // deliverablesComplete, issuesClosed, lessonsCaptured, budgetReconciled
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([closureStatus])
+}
+
+model ProjectStakeholder {
+  id                 String  @id @default(cuid())
+  projectId          String
+  name               String
+  organization       String?
+  role               String?
+  type               String  @default("internal") // internal, client, donor, government, other
+  influence          String  @default("medium") // low, medium, high
+  interest           String  @default("medium") // low, medium, high
+  engagementStrategy String? // inform, consult, involve, collaborate
+  email              String?
+  phone              String?
+  notes              String?
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([projectId])
+  @@index([type])
+}
+
+model ProjectCharter {
+  id              String    @id @default(cuid())
+  projectId       String    @unique
+  objectives      String?
+  scope           String?
+  outOfScope      String?
+  assumptions     String?
+  constraints     String?
+  successCriteria String?
+  approvalStatus  String    @default("draft") // draft, pending, approved
+  approvedBy      String?
+  approvedAt      DateTime?
+  notes           String?
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([projectId])
 }
 
 // Client (company) on a project - add clients then add employees under each
@@ -1531,12 +1694,17 @@ model ProjectClientContact {
 model Deliverable {
   id           String    @id @default(cuid())
   projectId    String
+  parentId     String? // WBS parent deliverable
+  wbsCode      String? // e.g. "1.2.3"
+  sortOrder    Int       @default(0)
   name         String
   description  String?
   status       String    @default("not_started") // "not_started", "in_progress", "completed", "cancelled"
   priority     String    @default("medium") // "low", "medium", "high", "urgent"
+  startDate    DateTime?
   dueDate      DateTime?
   completedAt  DateTime?
+  estimatedHours Int?
   quantity     Int       @default(1)
   unitCostCents Int      @default(0) // Cost per unit in cents
   totalCostCents Int     @default(0) // quantity * unitCostCents
@@ -1544,14 +1712,19 @@ model Deliverable {
   assignedType String? // "employee", "client_manager"
   notes        String?
 
-  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  project  Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  parent   Deliverable?  @relation("DeliverableWbs", fields: [parentId], references: [id], onDelete: Cascade)
+  children Deliverable[] @relation("DeliverableWbs")
+  raciEntries ProjectRaciEntry[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@index([projectId])
+  @@index([parentId])
   @@index([status])
   @@index([dueDate])
+  @@index([sortOrder])
 }
 
 model Budget {
@@ -1680,12 +1853,17 @@ model ProjectTask {
   assignedById     String?
   assignedAt       DateTime?
   estimatedMinutes Int?
+  startDate          DateTime?
+  predecessorTaskId  String?
+  dependencyType     String?   @default("FS") // FS, SS, FF, SF
 
   organization  Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
   project       Project      @relation(fields: [projectId], references: [id], onDelete: Cascade)
   createdBy     User         @relation("ProjectTaskCreatedBy", fields: [createdById], references: [id], onDelete: Cascade)
   assignee      Employee?    @relation("ProjectTaskAssignee", fields: [assigneeId], references: [id], onDelete: SetNull)
   assignedBy    User?        @relation("ProjectTaskAssignedBy", fields: [assignedById], references: [id], onDelete: SetNull)
+  predecessor   ProjectTask? @relation("TaskDependency", fields: [predecessorTaskId], references: [id], onDelete: SetNull)
+  dependents    ProjectTask[] @relation("TaskDependency")
   comments      ProjectTaskComment[]
   timeEntries   ProjectTaskTimeEntry[]
 
@@ -1697,6 +1875,46 @@ model ProjectTask {
   @@index([status])
   @@index([assigneeId])
   @@index([dueDate])
+  @@index([predecessorTaskId])
+}
+
+model ProjectRaciEntry {
+  id            String  @id @default(cuid())
+  projectId     String
+  activityKey   String  // deliverable:{id} or custom:{name}
+  deliverableId String?
+  activityName  String? // display for custom activities
+  personId      String
+  personType    String  // employee, client_manager
+  raciRole      String  // R, A, C, I
+
+  project     Project      @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  deliverable Deliverable? @relation(fields: [deliverableId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([projectId, activityKey, personId, personType, raciRole])
+  @@index([projectId])
+  @@index([deliverableId])
+}
+
+model ProjectPlan {
+  id          String  @id @default(cuid())
+  projectId   String
+  planType    String  @default("other") // communication, procurement, quality, resource, other
+  title       String
+  description String?
+  status      String  @default("draft") // draft, active, archived
+  notes       String?
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([projectId])
+  @@index([planType])
 }
 
 model ProjectTaskComment {

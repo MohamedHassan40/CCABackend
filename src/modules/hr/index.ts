@@ -382,6 +382,16 @@ export const hrManifest: ModuleManifest = {
       label: 'Announcements',
       permission: 'hr.announcements.view',
     },
+    {
+      path: '/hr/complaints',
+      label: 'Complaints',
+      permission: 'hr.complaints.view',
+    },
+    {
+      path: '/hr/requests',
+      label: 'Employee Requests',
+      permission: 'hr.requests.view',
+    },
   ],
   dashboardWidgets: [
     {

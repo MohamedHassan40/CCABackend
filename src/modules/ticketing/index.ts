@@ -93,6 +93,61 @@ async function recordTicketHistory(
   });
 }
 
+function buildTicketsListWhere(
+  orgId: string,
+  userId: string,
+  permissionKeys: Set<string>,
+  query: {
+    status?: string;
+    priority?: string;
+    categoryId?: string;
+    search?: string;
+    tag?: string;
+    parentId?: string;
+    assigneeId?: string;
+  }
+): Record<string, unknown> {
+  const where: Record<string, unknown> = { orgId };
+  const andClauses: Record<string, unknown>[] = [];
+
+  if (isOwnTicketsScopeOnly(permissionKeys)) {
+    andClauses.push(ownTicketsFilter(userId));
+  }
+
+  if (query.status) where.status = query.status;
+  if (query.priority) where.priority = query.priority;
+  if (query.categoryId) where.categoryId = query.categoryId;
+
+  if (query.assigneeId === 'none' || query.assigneeId === '') {
+    where.assigneeId = null;
+  } else if (query.assigneeId) {
+    where.assigneeId = query.assigneeId;
+  }
+
+  if (query.tag) where.tags = { has: query.tag };
+
+  if (query.parentId === 'none' || query.parentId === '') {
+    where.parentTicketId = null;
+  } else if (query.parentId) {
+    where.parentTicketId = query.parentId;
+  }
+
+  if (query.search) {
+    andClauses.push({
+      OR: [
+        { title: { contains: query.search, mode: 'insensitive' } },
+        { description: { contains: query.search, mode: 'insensitive' } },
+      ],
+    });
+  }
+
+  if (andClauses.length > 0) {
+    where.AND = andClauses;
+  }
+
+  return where;
+}
+
 // GET /api/ticketing/tickets
 router.get(
   '/tickets',
@@ -110,48 +165,15 @@ router.get(
 
     const { status, priority, categoryId, search, tag, parentId, assigneeId } = req.query;
 
-    const where: any = {
-      orgId: req.org.id,
-    };
-
-    if (isOwnTicketsScopeOnly(permissionKeys)) {
-      Object.assign(where, ownTicketsFilter(req.user.id));
-    }
-
-    if (status) {
-      where.status = status;
-    }
-
-    if (priority) {
-      where.priority = priority;
-    }
-
-    if (categoryId) {
-      where.categoryId = categoryId;
-    }
-
-    if (assigneeId === 'none' || assigneeId === '') {
-      where.assigneeId = null;
-    } else if (assigneeId) {
-      where.assigneeId = assigneeId as string;
-    }
-
-    if (tag) {
-      where.tags = { has: tag as string };
-    }
-
-    if (parentId === 'none' || parentId === '') {
-      where.parentTicketId = null;
-    } else if (parentId) {
-      where.parentTicketId = parentId;
-    }
-
-    if (search) {
-      where.OR = [
-        { title: { contains: search as string, mode: 'insensitive' } },
-        { description: { contains: search as string, mode: 'insensitive' } },
-      ];
-    }
+    const where = buildTicketsListWhere(req.org.id, req.user.id, permissionKeys, {
+      status: status as string | undefined,
+      priority: priority as string | undefined,
+      categoryId: categoryId as string | undefined,
+      search: search as string | undefined,
+      tag: tag as string | undefined,
+      parentId: parentId as string | undefined,
+      assigneeId: assigneeId as string | undefined,
+    });
 
     const tickets = await prisma.ticket.findMany({
       where,
@@ -202,28 +224,30 @@ router.get(
 });
 
 // GET /api/ticketing/tickets/export - Export tickets as CSV (same filters as list)
-router.get('/tickets/export', requirePermission('ticketing.tickets.view'), async (req, res) => {
+router.get(
+  '/tickets/export',
+  requireAnyPermission('ticketing.tickets.view', 'ticketing.tickets.view_own'),
+  async (req, res) => {
   try {
     if (!req.org || !req.user) {
       res.status(401).json({ error: 'Unauthorized' });
       return;
     }
 
+    const permissionKeys = req.user.isSuperAdmin
+      ? new Set<string>(['ticketing.tickets.view'])
+      : await getUserPermissionKeys(req.user.id, req.org.id);
+
     const { status, priority, categoryId, search, tag, assigneeId } = req.query;
 
-    const where: any = { orgId: req.org.id };
-    if (status) where.status = status as string;
-    if (priority) where.priority = priority as string;
-    if (categoryId) where.categoryId = categoryId as string;
-    if (assigneeId === 'none' || assigneeId === '') where.assigneeId = null;
-    else if (assigneeId) where.assigneeId = assigneeId as string;
-    if (tag) where.tags = { has: tag as string };
-    if (search) {
-      where.OR = [
-        { title: { contains: search as string, mode: 'insensitive' } },
-        { description: { contains: search as string, mode: 'insensitive' } },
-      ];
-    }
+    const where = buildTicketsListWhere(req.org.id, req.user.id, permissionKeys, {
+      status: status as string | undefined,
+      priority: priority as string | undefined,
+      categoryId: categoryId as string | undefined,
+      search: search as string | undefined,
+      tag: tag as string | undefined,
+      assigneeId: assigneeId as string | undefined,
+    });
 
     const tickets = await prisma.ticket.findMany({
       where,
@@ -755,10 +779,16 @@ router.get(
       return;
     }
 
+    const permissionKeys = req.user.isSuperAdmin
+      ? new Set<string>(['ticketing.tickets.view'])
+      : await getUserPermissionKeys(req.user.id, req.org.id);
+    const hideInternal = isOwnTicketsScopeOnly(permissionKeys);
+
     const totalMinutes = ticket.timeEntries.reduce((s, e) => s + e.minutes, 0);
 
     res.json({
       ...ticket,
+      comments: hideInternal ? ticket.comments.filter((c) => !c.isInternal) : ticket.comments,
       totalMinutes,
     });
   } catch (error) {
@@ -768,7 +798,10 @@ router.get(
 });
 
 // POST /api/ticketing/tickets/:id/comments - Add comment to ticket
-router.post('/tickets/:id/comments', requirePermission('ticketing.tickets.edit'), async (req, res) => {
+router.post(
+  '/tickets/:id/comments',
+  requireAnyPermission('ticketing.tickets.edit', 'ticketing.tickets.view_own'),
+  async (req, res) => {
   try {
     if (!req.org || !req.user) {
       res.status(401).json({ error: 'Unauthorized' });
@@ -782,6 +815,12 @@ router.post('/tickets/:id/comments', requirePermission('ticketing.tickets.edit')
       res.status(400).json({ error: 'Comment content is required' });
       return;
     }
+
+    const permissionKeys = req.user.isSuperAdmin
+      ? new Set<string>(['ticketing.tickets.edit'])
+      : await getUserPermissionKeys(req.user.id, req.org.id);
+    const canEditAll = req.user.isSuperAdmin || permissionKeys.has('ticketing.tickets.edit');
+    const ownOnly = !canEditAll && isOwnTicketsScopeOnly(permissionKeys);
 
     const ticket = await prisma.ticket.findFirst({
       where: {
@@ -802,12 +841,24 @@ router.post('/tickets/:id/comments', requirePermission('ticketing.tickets.edit')
       return;
     }
 
+    if (ownOnly) {
+      const allowed = await assertCanAccessTicket(req, ticket);
+      if (!allowed) {
+        res.status(403).json({ error: 'You do not have access to this ticket' });
+        return;
+      }
+      if (isInternal === true) {
+        res.status(403).json({ error: 'Internal notes require edit permission' });
+        return;
+      }
+    }
+
     const comment = await prisma.ticketComment.create({
       data: {
         ticketId: id,
         userId: req.user.id,
         content,
-        isInternal: isInternal === true,
+        isInternal: canEditAll && isInternal === true,
       },
       include: {
         user: {
@@ -1519,39 +1570,51 @@ router.delete('/canned-replies/:id', requirePermission('ticketing.tickets.delete
 });
 
 // GET /api/ticketing/reports - Stats by status, category, assignee, priority
-router.get('/reports', requirePermission('ticketing.tickets.view'), async (req, res) => {
+router.get(
+  '/reports',
+  requireAnyPermission('ticketing.tickets.view', 'ticketing.tickets.view_own'),
+  async (req, res) => {
   try {
-    if (!req.org) {
+    if (!req.org || !req.user) {
       res.status(401).json({ error: 'Unauthorized' });
       return;
+    }
+
+    const permissionKeys = req.user.isSuperAdmin
+      ? new Set<string>(['ticketing.tickets.view'])
+      : await getUserPermissionKeys(req.user.id, req.org.id);
+
+    const baseWhere: Record<string, unknown> = { orgId: req.org.id };
+    if (isOwnTicketsScopeOnly(permissionKeys)) {
+      baseWhere.AND = [ownTicketsFilter(req.user.id)];
     }
 
     const [byStatus, byPriority, byCategory, byAssignee, total, openCount] = await Promise.all([
       prisma.ticket.groupBy({
         by: ['status'],
-        where: { orgId: req.org.id },
+        where: baseWhere,
         _count: { id: true },
         orderBy: { _count: { id: 'desc' } },
       }),
       prisma.ticket.groupBy({
         by: ['priority'],
-        where: { orgId: req.org.id },
+        where: baseWhere,
         _count: { id: true },
         orderBy: { _count: { id: 'desc' } },
       }),
       prisma.ticket.groupBy({
         by: ['categoryId'],
-        where: { orgId: req.org.id },
+        where: baseWhere,
         _count: { id: true },
       }),
       prisma.ticket.groupBy({
         by: ['assigneeId'],
-        where: { orgId: req.org.id },
+        where: baseWhere,
         _count: { id: true },
       }),
-      prisma.ticket.count({ where: { orgId: req.org.id } }),
+      prisma.ticket.count({ where: baseWhere }),
       prisma.ticket.count({
-        where: { orgId: req.org.id, status: 'open' },
+        where: { ...baseWhere, status: 'open' },
       }),
     ]);
 

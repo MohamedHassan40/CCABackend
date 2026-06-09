@@ -182,5 +182,146 @@ describe('Ticketing Module', () => {
       expect(response.status).toBe(400);
     });
   });
+
+  describe('view_own scoping', () => {
+    async function createLimitedUser(permissionKeys: string[]) {
+      const limitedUser = await createTestUser();
+      const role = await prisma.role.create({
+        data: {
+          key: `ticketing-limited-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+          name: 'Ticketing Limited',
+        },
+      });
+      for (const key of permissionKeys) {
+        const perm = await prisma.permission.upsert({
+          where: { key },
+          update: {},
+          create: { key, name: key },
+        });
+        await prisma.rolePermission.create({
+          data: { roleId: role.id, permissionId: perm.id },
+        });
+      }
+      const membership = await createTestMembership(limitedUser.id, org.id, { roleKeys: [] });
+      await prisma.membershipRole.create({
+        data: { membershipId: membership.id, roleId: role.id },
+      });
+      return limitedUser;
+    }
+
+    it('view_own lists only tickets created by or assigned to the user', async () => {
+      await prisma.permission.upsert({
+        where: { key: 'ticketing.tickets.view_own' },
+        update: {},
+        create: { key: 'ticketing.tickets.view_own', name: 'View Own Tickets' },
+      });
+
+      const otherUser = await createTestUser();
+      const limitedUser = await createLimitedUser(['ticketing.tickets.view_own']);
+
+      await prisma.ticket.createMany({
+        data: [
+          {
+            orgId: org.id,
+            title: 'Mine created',
+            description: 'x',
+            status: 'open',
+            priority: 'medium',
+            createdById: limitedUser.id,
+          },
+          {
+            orgId: org.id,
+            title: 'Mine assigned',
+            description: 'x',
+            status: 'open',
+            priority: 'medium',
+            createdById: otherUser.id,
+            assigneeId: limitedUser.id,
+          },
+          {
+            orgId: org.id,
+            title: 'Someone else',
+            description: 'secret',
+            status: 'open',
+            priority: 'medium',
+            createdById: otherUser.id,
+          },
+        ],
+      });
+
+      api.setAuth(limitedUser.id, org.id);
+      const response = await api.get('/api/ticketing/tickets');
+      expect(response.status).toBe(200);
+      expect(response.body).toHaveLength(2);
+      expect(response.body.every((t: { title: string }) => t.title !== 'Someone else')).toBe(true);
+    });
+
+    it('view_own search does not leak other users tickets', async () => {
+      await prisma.permission.upsert({
+        where: { key: 'ticketing.tickets.view_own' },
+        update: {},
+        create: { key: 'ticketing.tickets.view_own', name: 'View Own Tickets' },
+      });
+
+      const otherUser = await createTestUser();
+      const limitedUser = await createLimitedUser(['ticketing.tickets.view_own']);
+
+      await prisma.ticket.create({
+        data: {
+          orgId: org.id,
+          title: 'Secret leak keyword',
+          description: 'should not appear',
+          status: 'open',
+          priority: 'medium',
+          createdById: otherUser.id,
+        },
+      });
+      await prisma.ticket.create({
+        data: {
+          orgId: org.id,
+          title: 'My leak keyword ticket',
+          description: 'visible',
+          status: 'open',
+          priority: 'medium',
+          createdById: limitedUser.id,
+        },
+      });
+
+      api.setAuth(limitedUser.id, org.id);
+      const response = await api.get('/api/ticketing/tickets?search=leak');
+      expect(response.status).toBe(200);
+      expect(response.body).toHaveLength(1);
+      expect(response.body[0].title).toBe('My leak keyword ticket');
+    });
+
+    it('view_own user can comment on own ticket without edit permission', async () => {
+      await prisma.permission.upsert({
+        where: { key: 'ticketing.tickets.view_own' },
+        update: {},
+        create: { key: 'ticketing.tickets.view_own', name: 'View Own Tickets' },
+      });
+
+      const limitedUser = await createLimitedUser(['ticketing.tickets.view_own']);
+      const ticket = await prisma.ticket.create({
+        data: {
+          orgId: org.id,
+          title: 'Need help',
+          description: 'issue',
+          status: 'open',
+          priority: 'medium',
+          createdById: limitedUser.id,
+        },
+      });
+
+      api.setAuth(limitedUser.id, org.id);
+      const response = await api
+        .post(`/api/ticketing/tickets/${ticket.id}/comments`)
+        .send({ content: 'Follow up from employee' });
+
+      expect(response.status).toBe(201);
+      expect(response.body.content).toBe('Follow up from employee');
+      expect(response.body.isInternal).toBe(false);
+    });
+  });
 });
 

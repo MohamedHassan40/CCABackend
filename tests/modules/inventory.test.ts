@@ -19,6 +19,10 @@ const INVENTORY_PERMISSIONS = [
   'inventory.categories.create',
   'inventory.categories.edit',
   'inventory.categories.delete',
+  'inventory.assignments.view',
+  'inventory.assignments.create',
+  'inventory.assignments.approve',
+  'inventory.assignments.edit',
 ];
 
 describe('Inventory Module', () => {
@@ -218,6 +222,68 @@ describe('Inventory Module', () => {
       const response = await api.get('/api/inventory/categories');
       expect(response.status).toBe(200);
       expect(response.body.some((c: { name: string }) => c.name === 'Tools')).toBe(true);
+    });
+  });
+
+  describe('Assignment workflow', () => {
+    async function createEmployeeRecord() {
+      return prisma.employee.create({
+        data: {
+          orgId: org.id,
+          fullName: 'Test Employee',
+          email: `emp-${Date.now()}@example.com`,
+          employeeCode: `EMP-${Date.now()}`,
+          status: 'active',
+        },
+      });
+    }
+
+    it('creates pending assignment and approves it', async () => {
+      const item = await createItem({ quantity: 5 });
+      const employee = await createEmployeeRecord();
+
+      const createRes = await api.post('/api/inventory/assignments').send({
+        assetId: item.id,
+        employeeId: employee.id,
+        quantity: 2,
+        reason: 'Onboarding',
+      });
+      expect(createRes.status).toBe(201);
+      expect(createRes.body.status).toBe('pending');
+
+      const approveRes = await api.put(`/api/inventory/assignments/${createRes.body.id}/approve`);
+      expect(approveRes.status).toBe(200);
+      expect(approveRes.body.status).toBe('active');
+    });
+
+    it('rejects and cancels pending assignments', async () => {
+      const item = await createItem({ quantity: 5, sku: `SKU-${Date.now()}-a` });
+      const employee = await createEmployeeRecord();
+
+      const rejectTarget = await api.post('/api/inventory/assignments').send({
+        assetId: item.id,
+        employeeId: employee.id,
+        quantity: 1,
+      });
+      expect(rejectTarget.status).toBe(201);
+
+      const rejectRes = await api
+        .put(`/api/inventory/assignments/${rejectTarget.body.id}/reject`)
+        .send({ rejectionReason: 'Not needed' });
+      expect(rejectRes.status).toBe(200);
+      expect(rejectRes.body.status).toBe('rejected');
+
+      const item2 = await createItem({ quantity: 5, sku: `SKU-${Date.now()}-b` });
+      const cancelTarget = await api.post('/api/inventory/assignments').send({
+        assetId: item2.id,
+        employeeId: employee.id,
+        quantity: 1,
+      });
+      expect(cancelTarget.status).toBe(201);
+
+      const cancelRes = await api.put(`/api/inventory/assignments/${cancelTarget.body.id}/cancel`);
+      expect(cancelRes.status).toBe(200);
+      expect(cancelRes.body.status).toBe('cancelled');
     });
   });
 });

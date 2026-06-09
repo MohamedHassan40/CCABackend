@@ -139,6 +139,8 @@ export function buildProjectDetailInclude(access: ProjectAccess, permKeys: Set<s
         include: { file: true },
         orderBy: { createdAt: 'desc' as const },
       };
+      include.stakeholders = { orderBy: { name: 'asc' as const } };
+      include.charter = true;
     }
   } else {
     // Client portal: limited project payload

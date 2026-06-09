@@ -29,7 +29,8 @@ export async function runPmoBudgetAlertJobs(): Promise<{ alerted: number; errors
           budgetCents: true,
           spentCents: true,
           currency: true,
-          notes: true,
+          budgetAlert90SentAt: true,
+          budgetAlert100SentAt: true,
         },
       });
 
@@ -43,10 +44,9 @@ export async function runPmoBudgetAlertJobs(): Promise<{ alerted: number; errors
         const budget = p.budgetCents ?? 0;
         if (budget <= 0) continue;
         const pct = Math.round((p.spentCents / budget) * 100);
-        const marker = `[budget-alert:${pct >= 100 ? '100' : '90'}]`;
-        if ((p.notes ?? '').includes(marker)) continue;
-
         if (pct < 90) continue;
+        if (pct >= 100 && p.budgetAlert100SentAt) continue;
+        if (pct >= 90 && pct < 100 && p.budgetAlert90SentAt) continue;
 
         const message =
           pct >= 100
@@ -82,7 +82,9 @@ export async function runPmoBudgetAlertJobs(): Promise<{ alerted: number; errors
 
         await prisma.project.update({
           where: { id: p.id },
-          data: { notes: p.notes ? `${p.notes}\n${marker}` : marker },
+          data: pct >= 100
+            ? { budgetAlert100SentAt: new Date() }
+            : { budgetAlert90SentAt: new Date() },
         });
         alerted++;
       }

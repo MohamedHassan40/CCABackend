@@ -2284,6 +2284,14 @@ router.post('/conversations', async (req: Request, res: Response) => {
       return;
     }
 
+    if (req.user) {
+      const userEmail = req.user.email.trim().toLowerCase();
+      if (userEmail !== String(memberEmail).trim().toLowerCase()) {
+        res.status(403).json({ error: 'Member email must match your account' });
+        return;
+      }
+    }
+
     // Verify member has active membership
     const membership = await prisma.memberMembership.findFirst({
       where: {

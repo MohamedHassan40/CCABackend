@@ -116,4 +116,66 @@ describe('PMO Module', () => {
       expect(project.body.spentCents).toBe(35000);
     });
   });
+
+  describe('Project managers', () => {
+    it('assigns and removes a project manager', async () => {
+      const employee = await prisma.employee.create({
+        data: {
+          orgId: org.id,
+          fullName: 'PM Employee',
+          email: `pm-${Date.now()}@example.com`,
+        },
+      });
+
+      const created = await api.post('/api/pmo/projects').send({ name: 'Manager Project' });
+      const projectId = created.body.id;
+
+      const assignRes = await api.post(`/api/pmo/projects/${projectId}/managers`).send({
+        employeeId: employee.id,
+        isPrimary: true,
+      });
+      expect(assignRes.status).toBe(200);
+      expect(assignRes.body.employeeId).toBe(employee.id);
+
+      const project = await api.get(`/api/pmo/projects/${projectId}`);
+      expect(project.body.projectManagers).toHaveLength(1);
+
+      const managerId = project.body.projectManagers[0].id;
+      const removeRes = await api.delete(`/api/pmo/projects/${projectId}/managers/${managerId}`);
+      expect(removeRes.status).toBe(200);
+
+      const after = await api.get(`/api/pmo/projects/${projectId}`);
+      expect(after.body.projectManagers).toHaveLength(0);
+    });
+
+    it('returns 404 when removing a manager from the wrong project', async () => {
+      const employee = await prisma.employee.create({
+        data: {
+          orgId: org.id,
+          fullName: 'Scoped PM',
+          email: `scoped-${Date.now()}@example.com`,
+        },
+      });
+
+      const projectA = await api.post('/api/pmo/projects').send({ name: 'Project A' });
+      const projectB = await api.post('/api/pmo/projects').send({ name: 'Project B' });
+
+      const assignRes = await api.post(`/api/pmo/projects/${projectA.body.id}/managers`).send({
+        employeeId: employee.id,
+      });
+      expect(assignRes.status).toBe(200);
+
+      const wrongProjectDelete = await api.delete(
+        `/api/pmo/projects/${projectB.body.id}/managers/${assignRes.body.id}`
+      );
+      expect(wrongProjectDelete.status).toBe(404);
+    });
+  });
+
+  describe('GET /api/pmo/tasks/:taskId/time-entries', () => {
+    it('returns 404 for org-only endpoint when task does not exist', async () => {
+      const response = await api.get('/api/pmo/tasks/nonexistent-task-id/time-entries');
+      expect(response.status).toBe(404);
+    });
+  });
 });
