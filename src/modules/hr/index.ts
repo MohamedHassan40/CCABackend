@@ -6,6 +6,7 @@ import { requirePermission } from '../../middleware/permissions';
 import { moduleRegistry } from '../../core/modules/registry';
 import { hashPassword } from '../../core/auth/password';
 import type { ModuleManifest } from '@cloud-org/shared';
+import { assertOrganizationCanAddUsers, OrganizationUserLimitError } from '../../core/billing/plan-limits';
 
 // Import sub-routers
 import leaveRouter from './leave';
@@ -735,21 +736,30 @@ router.post('/employees', requirePermission('hr.employees.create'), async (req, 
 
     // Check user limit if creating user account
     if (createUserAccount && email && password) {
-      if (organization != null && organization.maxUsers != null && organization.maxUsers !== undefined) {
-        const currentUserCount = await prisma.membership.count({
-          where: {
-            organizationId: req.org.id,
-            isActive: true,
-          },
-        });
+      let user = await prisma.user.findUnique({
+        where: { email },
+      });
 
-        if (currentUserCount >= organization.maxUsers) {
-          res.status(403).json({
-            error: `User limit reached. Maximum ${organization.maxUsers} users allowed.`,
-            currentCount: currentUserCount,
-            maxUsers: organization.maxUsers,
-          });
-          return;
+      const existingMembership = user
+        ? await prisma.membership.findUnique({
+            where: {
+              userId_organizationId: {
+                userId: user.id,
+                organizationId: req.org.id,
+              },
+            },
+          })
+        : null;
+
+      if (!existingMembership) {
+        try {
+          await assertOrganizationCanAddUsers(orgId);
+        } catch (err) {
+          if (err instanceof OrganizationUserLimitError) {
+            res.status(err.statusCode).json(err.toJSON());
+            return;
+          }
+          throw err;
         }
       }
     }
@@ -1195,49 +1205,37 @@ router.post('/employees/bulk', requirePermission('hr.employees.create'), async (
 
     // Check user limit for employees that will create user accounts
     const employeesWithAccounts = employees.filter((emp) => emp.email && emp.password);
-    if (employeesWithAccounts.length > 0 && organization != null) {
-      if (organization.maxUsers !== null && organization.maxUsers !== undefined) {
-        const currentUserCount = await prisma.membership.count({
-          where: {
-            organizationId: orgId,
-            isActive: true,
-          },
-        });
-
-        // Count how many NEW memberships will actually be created
-        const emailsToCheck = employeesWithAccounts.map((emp) => emp.email).filter(Boolean);
-        const existingUsers = await prisma.user.findMany({
-          where: {
-            email: { in: emailsToCheck },
-          },
-          include: {
-            memberships: {
-              where: {
-                organizationId: orgId,
-                isActive: true,
-              },
+    if (employeesWithAccounts.length > 0) {
+      const emailsToCheck = employeesWithAccounts.map((emp) => emp.email).filter(Boolean);
+      const existingUsers = await prisma.user.findMany({
+        where: {
+          email: { in: emailsToCheck },
+        },
+        include: {
+          memberships: {
+            where: {
+              organizationId: orgId,
+              isActive: true,
             },
           },
-        });
+        },
+      });
 
-        // Count users that will need NEW memberships
-        const usersNeedingMembership = existingUsers.filter(
-          (user) => user.memberships.length === 0
-        ).length;
-        const newUsersNeeded = emailsToCheck.length - existingUsers.length;
-        const totalNewMemberships = usersNeedingMembership + newUsersNeeded;
+      const usersNeedingMembership = existingUsers.filter(
+        (user) => user.memberships.length === 0
+      ).length;
+      const newUsersNeeded = emailsToCheck.length - existingUsers.length;
+      const totalNewMemberships = usersNeedingMembership + newUsersNeeded;
 
-        const availableSlots = organization.maxUsers - currentUserCount;
-        if (totalNewMemberships > availableSlots) {
-          res.status(403).json({
-            error: `Cannot create ${totalNewMemberships} new user accounts. Only ${availableSlots} slots available (limit: ${organization.maxUsers}). ${existingUsers.length - usersNeedingMembership} users already have accounts.`,
-            currentCount: currentUserCount,
-            maxUsers: organization.maxUsers,
-            requested: totalNewMemberships,
-            available: availableSlots,
-            alreadyMembers: existingUsers.length - usersNeedingMembership,
-          });
-          return;
+      if (totalNewMemberships > 0) {
+        try {
+          await assertOrganizationCanAddUsers(orgId, totalNewMemberships);
+        } catch (err) {
+          if (err instanceof OrganizationUserLimitError) {
+            res.status(err.statusCode).json(err.toJSON());
+            return;
+          }
+          throw err;
         }
       }
     }

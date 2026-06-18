@@ -22,6 +22,7 @@ import { ensureProjectPortalToken } from '../../routes/publicPmo';
 import { registerPmoPhase2Routes } from './stakeholders-charter-reports';
 import { registerPmoPlanningRoutes } from './planning-phase3';
 import { registerPmoPhase4Routes } from './identification-closing-phase4';
+import { assertOrganizationCanAddUsers, OrganizationUserLimitError } from '../../core/billing/plan-limits';
 
 const router = Router();
 registerPmoPhase2Routes(router);
@@ -568,30 +569,6 @@ router.post('/projects/:id/client-managers', requirePermission('pmo.client_manag
 
     if (!(await requireProjectAccess(req, res, id))) return;
 
-    // Check user limit
-    const organization = await prisma.organization.findUnique({
-      where: { id: req.org.id },
-      select: { maxUsers: true },
-    });
-
-    if (organization != null && organization.maxUsers != null && organization.maxUsers !== undefined) {
-      const currentUserCount = await prisma.membership.count({
-        where: {
-          organizationId: req.org.id,
-          isActive: true,
-        },
-      });
-
-      if (currentUserCount >= organization.maxUsers) {
-        res.status(403).json({
-          error: `User limit reached. Maximum ${organization.maxUsers} users allowed.`,
-          currentCount: currentUserCount,
-          maxUsers: organization.maxUsers,
-        });
-        return;
-      }
-    }
-
     // Check if user already exists
     let user = await prisma.user.findUnique({
       where: { email },
@@ -619,6 +596,16 @@ router.post('/projects/:id/client-managers', requirePermission('pmo.client_manag
     });
 
     if (!membership) {
+      try {
+        await assertOrganizationCanAddUsers(req.org.id);
+      } catch (err) {
+        if (err instanceof OrganizationUserLimitError) {
+          res.status(err.statusCode).json(err.toJSON());
+          return;
+        }
+        throw err;
+      }
+
       // Create membership
       membership = await prisma.membership.create({
         data: {

@@ -7,6 +7,7 @@ import { config } from '../core/config';
 import { authRateLimiter, passwordResetRateLimiter, emailOtpRateLimiter } from '../middleware/security';
 import { validateInput, validators } from '../middleware/validation';
 import type { AuthResponse } from '@cloud-org/shared';
+import { applyFreePlanUserLimit } from '../core/billing/plan-limits';
 
 const router = Router();
 
@@ -83,6 +84,7 @@ router.post('/register', async (req: Request, res: Response) => {
 
       // Seed default modules with trial
       await seedDefaultModules(org.id);
+      await applyFreePlanUserLimit(org.id);
 
       const { sendEmailQueued, emailTemplates } = await import('../core/email');
       const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
@@ -129,6 +131,7 @@ router.post('/register', async (req: Request, res: Response) => {
 
     // Seed default modules with trial
     await seedDefaultModules(org.id);
+    await applyFreePlanUserLimit(org.id);
 
     const { sendEmailQueued, emailTemplates } = await import('../core/email');
     const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';

@@ -12,6 +12,7 @@ import {
   withPaymentRedirectFlag,
 } from '../../core/payments/moyasar-checkout';
 import { isStaleInvoice } from '../../core/payments/payment-invoice-status';
+import { applyFreePlanUserLimit, syncOrgUserLimitFromModulePrice } from '../../core/billing/plan-limits';
 
 const router = Router();
 
@@ -299,6 +300,7 @@ router.post('/subscribe', requirePermission('subscriptions.manage'), async (req,
       update: {
         isEnabled: true,
         plan,
+        seats: modulePrice.maxSeats,
         expiresAt: null,
         trialEndsAt: null,
       },
@@ -307,10 +309,16 @@ router.post('/subscribe', requirePermission('subscriptions.manage'), async (req,
         moduleId: module.id,
         isEnabled: true,
         plan,
+        seats: modulePrice.maxSeats,
         expiresAt: null,
         trialEndsAt: null,
       },
     });
+
+    if (!paidPlan) {
+      await syncOrgUserLimitFromModulePrice(req.org.id, module.id, plan, period);
+      await applyFreePlanUserLimit(req.org.id);
+    }
 
     const payment = await prisma.payment.create({
       data: {

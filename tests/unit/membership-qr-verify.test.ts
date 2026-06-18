@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi, afterEach } from 'vitest';
 import {
   buildMembershipVerifyUrl,
   isMembershipActiveForVerification,
@@ -6,7 +6,14 @@ import {
 } from '../../src/core/membership/qrVerify';
 
 describe('membership QR verify', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it('treats membership as active through end of endDate day (UTC)', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-05-24T12:00:00.000Z'));
+
     const endDate = new Date('2026-05-24T00:00:00.000Z');
     expect(
       isMembershipActiveForVerification({ status: 'active', endDate })

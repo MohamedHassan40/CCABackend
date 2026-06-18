@@ -5,6 +5,7 @@ import { requireSuperAdmin } from '../middleware/permissions';
 import { hashPassword } from '../core/auth/password';
 import { sendEmail, emailTemplates } from '../core/email';
 import { config } from '../core/config';
+import { applyFreePlanUserLimit } from '../core/billing/plan-limits';
 
 const router = Router();
 
@@ -137,6 +138,8 @@ router.post('/create', async (req: Request, res: Response) => {
         }
       }
     }
+
+    await applyFreePlanUserLimit(organization.id);
 
     // Send welcome email (no approval step - org is active immediately)
     try {

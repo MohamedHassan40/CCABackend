@@ -6,7 +6,11 @@ export default defineConfig({
   test: {
     globals: true,
     environment: 'node',
-    include: ['tests/unit/membership-webhook.test.ts'],
+    include: [
+      'tests/unit/membership-webhook.test.ts',
+      'tests/unit/orgModuleAccess.test.ts',
+      'tests/unit/membership-qr-verify.test.ts',
+    ],
     testTimeout: 15_000,
   },
   resolve: {

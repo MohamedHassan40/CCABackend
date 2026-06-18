@@ -3,6 +3,7 @@ import prisma from '../core/db';
 import { authMiddleware } from '../middleware/auth';
 import { requirePermission, requireSuperAdmin } from '../middleware/permissions';
 import { hashPassword } from '../core/auth/password';
+import { assertOrganizationCanAddUsers, OrganizationUserLimitError } from '../core/billing/plan-limits';
 
 const router = Router();
 
@@ -129,30 +130,6 @@ router.post('/', authMiddleware, requirePermission('users.create'), async (req: 
       return;
     }
 
-    // Check user limit
-    const organization = await prisma.organization.findUnique({
-      where: { id: req.org.id },
-      select: { maxUsers: true },
-    });
-
-    if (organization != null && organization.maxUsers != null && organization.maxUsers !== undefined) {
-      const currentUserCount = await prisma.membership.count({
-        where: {
-          organizationId: req.org.id,
-          isActive: true,
-        },
-      });
-
-      if (currentUserCount >= organization.maxUsers) {
-        res.status(403).json({
-          error: `User limit reached. Maximum ${organization.maxUsers} users allowed.`,
-          currentCount: currentUserCount,
-          maxUsers: organization.maxUsers,
-        });
-        return;
-      }
-    }
-
     const { email, name, password, roleKeys } = req.body;
 
     if (!email) {
@@ -194,6 +171,16 @@ router.post('/', authMiddleware, requirePermission('users.create'), async (req: 
     if (existingMembership) {
       res.status(400).json({ error: 'User is already a member of this organization' });
       return;
+    }
+
+    try {
+      await assertOrganizationCanAddUsers(req.org.id);
+    } catch (err) {
+      if (err instanceof OrganizationUserLimitError) {
+        res.status(err.statusCode).json(err.toJSON());
+        return;
+      }
+      throw err;
     }
 
     // Create membership

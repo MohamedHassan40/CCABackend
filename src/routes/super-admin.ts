@@ -2,6 +2,10 @@ import { Router, Request, Response } from 'express';
 import prisma from '../core/db';
 import { authMiddleware } from '../middleware/auth';
 import { requireSuperAdmin } from '../middleware/permissions';
+import {
+  applyFreePlanUserLimit,
+  countOrganizationSeatUsers,
+} from '../core/billing/plan-limits';
 
 const router = Router();
 
@@ -434,6 +438,10 @@ router.put('/organizations/:id/modules/:moduleKey', async (req: Request, res: Re
       },
     });
 
+    if (plan === 'basic' || plan === 'trial') {
+      await applyFreePlanUserLimit(id);
+    }
+
     res.json({
       moduleKey: module.key,
       moduleName: module.name,
@@ -461,12 +469,7 @@ router.put('/organizations/:id/user-limit', async (req: Request, res: Response) 
     }
 
     // Check current user count
-    const currentUserCount = await prisma.membership.count({
-      where: {
-        organizationId: id,
-        isActive: true,
-      },
-    });
+    const currentUserCount = await countOrganizationSeatUsers(id);
 
     if (maxUsers !== null && maxUsers < currentUserCount) {
       res.status(400).json({
@@ -604,9 +607,7 @@ router.put('/organizations/:id/package', async (req: Request, res: Response) => 
       return;
     }
 
-    const currentUserCount = await prisma.membership.count({
-      where: { organizationId: id, isActive: true },
-    });
+    const currentUserCount = await countOrganizationSeatUsers(id);
     const currentEmployeeCount = await prisma.employee.count({
       where: { orgId: id },
     });

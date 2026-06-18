@@ -847,7 +847,7 @@ async function main() {
     proPriceYearly: number,
     ultraPriceMonthly: number,
     ultraPriceYearly: number,
-    basicMaxSeats: number = 3,
+    basicMaxSeats: number = 5,
     proMaxSeats: number = 10,
     ultraMaxSeats: number | null = null
   ) => {
@@ -860,7 +860,10 @@ async function main() {
           billingPeriod: 'monthly',
         },
       },
-      update: {},
+      update: {
+        priceCents: 0,
+        maxSeats: basicMaxSeats,
+      },
       create: {
         moduleId: module.id,
         plan: 'basic',
@@ -879,7 +882,10 @@ async function main() {
           billingPeriod: 'yearly',
         },
       },
-      update: {},
+      update: {
+        priceCents: 0,
+        maxSeats: basicMaxSeats,
+      },
       create: {
         moduleId: module.id,
         plan: 'basic',
@@ -980,7 +986,12 @@ async function main() {
   await seedModulePrices(billingModule, 0, 0, 0, 0); // Billing: Free for all plans
   await seedModulePrices(inventoryModule, 9900, 99000, 19900, 199000); // Inventory: Pro 99/month, Ultra 199/month
 
-  console.log('✅ Created module prices (Basic: 3 users free, Pro: 10 users paid, Ultra: unlimited paid)\n');
+  await prisma.modulePrice.updateMany({
+    where: { plan: 'basic', priceCents: 0 },
+    data: { maxSeats: 5 },
+  });
+
+  console.log('✅ Created module prices (Basic: 5 users free, Pro: 10 users paid, Ultra: unlimited paid)\n');
 
   // ============================================
   // CREATE BUNDLES
