@@ -109,6 +109,8 @@ model Organization {
   storefrontSettings Json? // Storefront customization settings (hero, sections, etc.)
   /// Per-module email branding: { default?, membership?, ticketing?, pmo?, hr? }
   emailBranding      Json?
+  /// PMO org settings: { disabledOptionalTools?: string[] }
+  pmoSettings        Json?
 
   currentBundle      Bundle?         @relation("OrganizationCurrentBundle", fields: [currentBundleId], references: [id], onDelete: SetNull)
   memberships        Membership[]
@@ -1462,6 +1464,11 @@ model Project {
   budgetAlert90SentAt  DateTime? // Last 90% budget alert sent (dedup)
   budgetAlert100SentAt DateTime? // Last 100% budget alert sent (dedup)
   portalToken     String?   @unique // Public client status portal token
+  lifecyclePhase  String    @default("design") // design, preparation, planning, execution, closing
+  phaseGateChecklist Json? // manual checklist overrides per phase
+  phaseGateApprovals Json? // { design: { approvedAt, approvedBy }, ... }
+  designData      Json? // problem, objectives, targetAudience, mainOutputs, swot
+  enabledOptionalTools Json? // project-level optional tool overrides
 
   organization          Organization           @relation(fields: [orgId], references: [id], onDelete: Cascade)
   projectManagers       ProjectManager[]
@@ -1482,6 +1489,7 @@ model Project {
   proposal              ProjectProposal?
   lessonsLearned        ProjectLessonLearned[]
   closure               ProjectClosure?
+  changeRequests        ProjectChangeRequest[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -1490,6 +1498,32 @@ model Project {
   @@index([status])
   @@index([priority])
   @@index([startDate, endDate])
+  @@index([lifecyclePhase])
+}
+
+model ProjectChangeRequest {
+  id               String    @id @default(cuid())
+  projectId        String
+  title            String
+  description      String?
+  status           String    @default("pending") // pending, approved, rejected, implemented
+  priority         String    @default("medium")
+  impact           String?
+  requestedById    String?
+  requestedByName  String?
+  approvedById     String?
+  approvedByName   String?
+  approvedAt       DateTime?
+  rejectedAt       DateTime?
+  rejectionReason  String?
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([projectId])
+  @@index([status])
 }
 
 model ProjectProposal {

@@ -22,12 +22,14 @@ import { ensureProjectPortalToken } from '../../routes/publicPmo';
 import { registerPmoPhase2Routes } from './stakeholders-charter-reports';
 import { registerPmoPlanningRoutes } from './planning-phase3';
 import { registerPmoPhase4Routes } from './identification-closing-phase4';
+import { registerPmoLifecycleRoutes } from './lifecycle';
 import { assertOrganizationCanAddUsers, OrganizationUserLimitError } from '../../core/billing/plan-limits';
 
 const router = Router();
 registerPmoPhase2Routes(router);
 registerPmoPlanningRoutes(router);
 registerPmoPhase4Routes(router);
+registerPmoLifecycleRoutes(router);
 
 // Module manifest
 export const pmoManifest: ModuleManifest = {
@@ -35,6 +37,11 @@ export const pmoManifest: ModuleManifest = {
   name: 'PMO Portal',
   icon: 'briefcase',
   sidebarItems: [
+    {
+      path: '/pmo/dashboard',
+      label: 'Dashboard',
+      permission: 'pmo.projects.view',
+    },
     {
       path: '/pmo/proposals',
       label: 'Proposals',
@@ -101,6 +108,11 @@ export const pmoManifest: ModuleManifest = {
       permission: 'pmo.tasks.view',
     },
     {
+      path: '/pmo/knowledge',
+      label: 'Knowledge',
+      permission: 'pmo.projects.view',
+    },
+    {
       path: '/pmo/resources',
       label: 'Resource loading',
       permission: 'pmo.projects.view',
@@ -113,6 +125,13 @@ export const pmoManifest: ModuleManifest = {
       description: 'Number of active projects',
       apiPath: '/api/pmo/widgets/project-count',
       permission: 'pmo.projects.view',
+    },
+    {
+      id: 'pmo-overdue-tasks',
+      title: 'Overdue Tasks',
+      description: 'Tasks past due date',
+      apiPath: '/api/pmo/widgets/overdue-tasks',
+      permission: 'pmo.tasks.view',
     },
   ],
 };
@@ -2174,6 +2193,36 @@ router.get('/widgets/project-count', requirePermission('pmo.projects.view'), asy
     res.json({ count });
   } catch (error) {
     console.error('Error fetching project count:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// GET /api/pmo/widgets/overdue-tasks
+router.get('/widgets/overdue-tasks', requirePermission('pmo.tasks.view'), async (req, res) => {
+  try {
+    if (!req.org || !req.user) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+
+    const listWhere = await getProjectListWhere(req);
+    if (!listWhere) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+
+    const count = await prisma.projectTask.count({
+      where: {
+        orgId: req.org.id,
+        ...(listWhere.id ? { project: { id: listWhere.id } } : {}),
+        status: { notIn: ['completed', 'cancelled'] },
+        dueDate: { lt: new Date() },
+      },
+    });
+
+    res.json({ count });
+  } catch (error) {
+    console.error('Error fetching overdue tasks count:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
