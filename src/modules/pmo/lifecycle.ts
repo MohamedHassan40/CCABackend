@@ -9,6 +9,8 @@ import {
   computePhaseProgress,
   evaluateToolStatus,
   filterVisibleTools,
+  getAvailableOptionalTools,
+  canViewPhase,
   nextPhase,
   prevPhase,
 } from './lifecycle-config';
@@ -170,6 +172,26 @@ export function registerPmoLifecycleRoutes(router: Router): void {
       const pendingChanges = await prisma.projectChangeRequest.count({
         where: { project: baseWhere, status: 'pending' },
       });
+
+      const [openIssues, openRisks, pendingProposals, totalOpenTasks] = await Promise.all([
+        prisma.issue.count({
+          where: { project: baseWhere, status: { in: ['open', 'in_progress'] } },
+        }),
+        prisma.risk.count({
+          where: { project: baseWhere, status: { in: ['identified', 'mitigating'] } },
+        }),
+        prisma.projectProposal.count({
+          where: { orgId: req.org.id, status: { in: ['draft', 'submitted'] } },
+        }),
+        prisma.projectTask.count({
+          where: {
+            orgId: req.org.id,
+            project: baseWhere,
+            status: { notIn: ['completed', 'cancelled'] },
+          },
+        }),
+      ]);
+
       if (pendingChanges > 0) {
         alerts.push({
           type: 'change_request',
@@ -181,10 +203,16 @@ export function registerPmoLifecycleRoutes(router: Router): void {
       res.json({
         summary: {
           totalProjects,
+          activeProjects: statusCounts.active + statusCounts.planning,
           avgProgress,
           dueThisWeek: dueThisWeek.length,
           overdueTasks: overdueTasks.length,
           delayedProjects: delayedProjects.length,
+          openIssues,
+          openRisks,
+          pendingProposals,
+          pendingChanges,
+          totalOpenTasks,
         },
         financial: {
           totalBudgetCents: totalBudget,
@@ -208,6 +236,100 @@ export function registerPmoLifecycleRoutes(router: Router): void {
       });
     } catch (error) {
       console.error('PMO dashboard error:', error);
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+
+  // GET /api/pmo/projects/:id/stats
+  router.get('/projects/:id/stats', requirePermission('pmo.projects.view'), async (req: Request, res: Response) => {
+    try {
+      if (!req.org) {
+        res.status(401).json({ error: 'Unauthorized' });
+        return;
+      }
+      const { id } = req.params;
+      if (!(await requireProjectAccess(req, res, id))) return;
+
+      const now = new Date();
+      const project = await prisma.project.findFirst({
+        where: { id, orgId: req.org.id },
+        select: {
+          id: true,
+          name: true,
+          status: true,
+          lifecyclePhase: true,
+          progress: true,
+          startDate: true,
+          endDate: true,
+          budgetCents: true,
+          spentCents: true,
+          currency: true,
+        },
+      });
+      if (!project) {
+        res.status(404).json({ error: 'Project not found' });
+        return;
+      }
+
+      const [tasks, deliverables, risks, issues, milestones, pendingChanges] = await Promise.all([
+        prisma.projectTask.findMany({
+          where: { projectId: id },
+          select: { id: true, status: true, dueDate: true },
+        }),
+        prisma.deliverable.findMany({
+          where: { projectId: id },
+          select: { id: true, status: true },
+        }),
+        prisma.risk.findMany({ where: { projectId: id }, select: { id: true, status: true, impact: true } }),
+        prisma.issue.findMany({ where: { projectId: id }, select: { id: true, status: true } }),
+        prisma.projectMilestone.findMany({
+          where: { projectId: id },
+          select: { id: true, status: true, targetDate: true, completedAt: true },
+        }),
+        prisma.projectChangeRequest.count({ where: { projectId: id, status: 'pending' } }),
+      ]);
+
+      const openTasks = tasks.filter((t) => !['completed', 'cancelled'].includes(t.status));
+      const overdueTasks = openTasks.filter((t) => t.dueDate && new Date(t.dueDate) < now);
+      const completedTasks = tasks.filter((t) => t.status === 'completed');
+      const completedDeliverables = deliverables.filter((d) => d.status === 'completed');
+      const openIssues = issues.filter((i) => ['open', 'in_progress'].includes(i.status));
+      const openRisks = risks.filter((r) => !['closed', 'mitigated', 'occurred'].includes(r.status));
+      const highRisks = openRisks.filter((r) => r.impact === 'high' || r.impact === 'critical');
+      const overdueMilestones = milestones.filter(
+        (m) => !m.completedAt && m.targetDate && new Date(m.targetDate) < now,
+      );
+
+      const budgetCents = project.budgetCents ?? 0;
+      const spentCents = project.spentCents ?? 0;
+
+      res.json({
+        project,
+        tasks: {
+          total: tasks.length,
+          completed: completedTasks.length,
+          open: openTasks.length,
+          overdue: overdueTasks.length,
+        },
+        deliverables: { total: deliverables.length, completed: completedDeliverables.length },
+        risks: { total: risks.length, open: openRisks.length, high: highRisks.length },
+        issues: { total: issues.length, open: openIssues.length },
+        milestones: { total: milestones.length, overdue: overdueMilestones.length },
+        pendingChanges,
+        financial: {
+          budgetCents,
+          spentCents,
+          remainingCents: budgetCents - spentCents,
+          spendPercent: budgetCents > 0 ? Math.round((spentCents / budgetCents) * 100) : 0,
+          currency: project.currency,
+        },
+        isDelayed:
+          !!project.endDate &&
+          new Date(project.endDate) < now &&
+          !['completed', 'cancelled'].includes(project.status),
+      });
+    } catch (error) {
+      console.error('PMO project stats error:', error);
       res.status(500).json({ error: 'Internal server error' });
     }
   });
@@ -448,25 +570,33 @@ export function registerPmoLifecycleRoutes(router: Router): void {
       });
       const disabledOrgTools = getOrgDisabledTools(org?.pmoSettings);
       const enabledProjectTools = getProjectEnabledTools(project.enabledOptionalTools);
+      const approvals = project.phaseGateApprovals as Record<string, { approvedAt?: string }> | null;
+
+      const currentLifecyclePhase = (PMO_PHASES.includes(project.lifecyclePhase as PmoPhase)
+        ? project.lifecyclePhase
+        : 'design') as PmoPhase;
 
       const requestedPhase = req.query.phase as string | undefined;
-      const phase = (PMO_PHASES.includes(requestedPhase as PmoPhase)
-        ? requestedPhase
-        : PMO_PHASES.includes(project.lifecyclePhase as PmoPhase)
-          ? project.lifecyclePhase
-          : 'design') as PmoPhase;
+      let phase = currentLifecyclePhase;
+      if (requestedPhase && PMO_PHASES.includes(requestedPhase as PmoPhase)) {
+        const candidate = requestedPhase as PmoPhase;
+        phase = canViewPhase(candidate, currentLifecyclePhase, approvals) ? candidate : currentLifecyclePhase;
+      }
 
       const phases = PMO_PHASES.map((p) => ({
         key: p,
         progress: computePhaseProgress(p, project),
-        approved: !!(project.phaseGateApprovals as Record<string, { approvedAt?: string }>)?.[p]?.approvedAt,
-        isCurrent: p === phase,
+        approved: !!approvals?.[p]?.approvedAt,
+        isCurrent: p === currentLifecyclePhase,
+        locked: !canViewPhase(p, currentLifecyclePhase, approvals),
       }));
 
       const visibleTools = filterVisibleTools(phase, disabledOrgTools, enabledProjectTools).map((tool) => ({
         ...tool,
         status: evaluateToolStatus(tool.key, project),
       }));
+
+      const availableOptionalTools = getAvailableOptionalTools(phase, disabledOrgTools, enabledProjectTools);
 
       const gate = computePhaseGate(
         phase,
@@ -476,15 +606,18 @@ export function registerPmoLifecycleRoutes(router: Router): void {
       );
 
       res.json({
-        lifecyclePhase: project.lifecyclePhase,
+        lifecyclePhase: currentLifecyclePhase,
         viewPhase: phase,
         phases,
         tools: visibleTools,
+        availableOptionalTools,
+        allowedTabs: [...new Set(visibleTools.map((t) => t.tab))],
         gate,
         designData: project.designData ?? {},
         enabledOptionalTools: enabledProjectTools ?? [],
         nextPhase: nextPhase(phase),
         prevPhase: prevPhase(phase),
+        canApproveCurrentPhase: phase === currentLifecyclePhase,
       });
     } catch (error) {
       console.error('PMO lifecycle get error:', error);
@@ -510,6 +643,8 @@ export function registerPmoLifecycleRoutes(router: Router): void {
         action,
         checklistItem,
         checklistValue,
+        phase: viewPhase,
+        toolKey,
       } = req.body;
 
       const project = await loadProjectForLifecycle(id, req.org.id);
@@ -522,14 +657,27 @@ export function registerPmoLifecycleRoutes(router: Router): void {
         ? project.lifecyclePhase
         : 'design') as PmoPhase;
 
+      const phaseForAction =
+        viewPhase && PMO_PHASES.includes(viewPhase as PmoPhase) ? (viewPhase as PmoPhase) : currentPhase;
+
       let phaseGateApprovals = (project.phaseGateApprovals ?? {}) as Record<
         string,
         { approvedAt?: string; approvedBy?: string; approvedByName?: string }
       >;
       let nextLifecyclePhase = currentPhase;
       let manualChecklist = project.phaseGateChecklist;
+      let optionalToolsUpdate: string[] | undefined;
 
-      if (action === 'approve_gate') {
+      if (action === 'add_optional_tool' && toolKey) {
+        const existing = getProjectEnabledTools(project.enabledOptionalTools) ?? [];
+        if (!existing.includes(String(toolKey))) {
+          optionalToolsUpdate = [...existing, String(toolKey)];
+        }
+      } else if (action === 'approve_gate') {
+        if (phaseForAction !== currentPhase) {
+          res.status(400).json({ error: 'Can only approve the current project phase' });
+          return;
+        }
         const gate = computePhaseGate(currentPhase, project, manualChecklist, phaseGateApprovals);
         if (!gate.canApprove) {
           res.status(400).json({ error: 'Cannot approve phase: mandatory requirements incomplete' });
@@ -552,13 +700,17 @@ export function registerPmoLifecycleRoutes(router: Router): void {
         >;
         manualChecklist = {
           ...existing,
-          [currentPhase]: {
-            ...(existing[currentPhase] ?? {}),
+          [phaseForAction]: {
+            ...(existing[phaseForAction] ?? {}),
             [checklistItem]: !!checklistValue,
           },
         };
       } else if (lifecyclePhase && PMO_PHASES.includes(lifecyclePhase)) {
         nextLifecyclePhase = lifecyclePhase;
+      }
+
+      if (enabledOptionalTools !== undefined && Array.isArray(enabledOptionalTools)) {
+        optionalToolsUpdate = enabledOptionalTools.map(String);
       }
 
       const updated = await prisma.project.update({
@@ -567,8 +719,8 @@ export function registerPmoLifecycleRoutes(router: Router): void {
           lifecyclePhase: nextLifecyclePhase,
           ...(designData !== undefined && { designData }),
           ...(manualChecklist !== undefined && { phaseGateChecklist: manualChecklist as object }),
-          ...(enabledOptionalTools !== undefined && {
-            enabledOptionalTools: { enabled: enabledOptionalTools },
+          ...(optionalToolsUpdate !== undefined && {
+            enabledOptionalTools: { enabled: optionalToolsUpdate },
           }),
           phaseGateApprovals,
         },

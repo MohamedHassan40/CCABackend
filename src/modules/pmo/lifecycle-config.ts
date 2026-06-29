@@ -253,9 +253,42 @@ export function filterVisibleTools(
   enabledProjectTools: string[] | null,
 ) {
   return PMO_PHASE_TOOLS[phase].filter((tool) => {
-    if (tool.mandatory) return true;
-    if (enabledProjectTools?.includes(tool.key)) return true;
     if (disabledOrgTools.includes(tool.key)) return false;
-    return true;
+    if (tool.mandatory) return true;
+    return enabledProjectTools?.includes(tool.key) ?? false;
   });
+}
+
+export function getAvailableOptionalTools(
+  phase: PmoPhase,
+  disabledOrgTools: string[],
+  enabledProjectTools: string[] | null,
+) {
+  const enabled = new Set(enabledProjectTools ?? []);
+  return PMO_PHASE_TOOLS[phase].filter(
+    (tool) => !tool.mandatory && !disabledOrgTools.includes(tool.key) && !enabled.has(tool.key),
+  );
+}
+
+export function getPhaseTabs(phase: PmoPhase): string[] {
+  const tabs = new Set<string>();
+  for (const tool of PMO_PHASE_TOOLS[phase]) {
+    tabs.add(tool.tab);
+  }
+  return Array.from(tabs);
+}
+
+export function getPhaseIndex(phase: PmoPhase): number {
+  return PMO_PHASES.indexOf(phase);
+}
+
+export function canViewPhase(
+  phase: PmoPhase,
+  currentLifecyclePhase: PmoPhase,
+  phaseApprovals: Record<string, { approvedAt?: string }> | null | undefined,
+): boolean {
+  const targetIdx = getPhaseIndex(phase);
+  const currentIdx = getPhaseIndex(currentLifecyclePhase);
+  if (targetIdx <= currentIdx) return true;
+  return !!phaseApprovals?.[phase]?.approvedAt;
 }
