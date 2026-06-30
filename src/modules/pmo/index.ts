@@ -113,6 +113,11 @@ export const pmoManifest: ModuleManifest = {
       permission: 'pmo.projects.view',
     },
     {
+      path: '/pmo/guide',
+      label: 'Guide',
+      permission: 'pmo.projects.view',
+    },
+    {
       path: '/pmo/resources',
       label: 'Resource loading',
       permission: 'pmo.projects.view',

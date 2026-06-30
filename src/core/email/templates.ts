@@ -585,7 +585,7 @@ export const emailTemplates = {
         previewText: `${phaseLabel} phase ready for sign-off`,
         title: 'Phase gate ready for approval',
         innerHtml: `
-          ${p(`Project <strong>${escapeHtml(projectName)}</strong>: <strong>${escapeHtml(phaseLabel)}</strong> phase requirements are complete. Sponsor and PMO sign-off required.`)}
+          ${p(`Project <strong>${escapeHtml(projectName)}</strong>: <strong>${escapeHtml(phaseLabel)}</strong> phase requirements are complete. A PMO manager can approve the gate.`)}
           ${ccaButton(projectUrl, 'Review gate')}
         `,
       },

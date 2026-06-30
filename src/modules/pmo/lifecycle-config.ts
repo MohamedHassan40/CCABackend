@@ -214,17 +214,12 @@ function getPhaseApproval(approvals: unknown, phase: PmoPhase): PhaseApprovalRec
 
 export function isPhaseFullyApproved(approval: PhaseApprovalRecord | undefined): boolean {
   if (!approval) return false;
-  if (approval.approvedAt && !approval.signoffs) return true;
-  const signoffs = approval.signoffs ?? {};
-  if (Object.keys(signoffs).length === 0 && approval.approvedAt) return true;
-  return GATE_SIGNOFF_ROLES.every((role) => !!signoffs[role]?.approvedAt);
+  if (approval.approvedAt) return true;
+  return false;
 }
 
-export function getPendingSignoffRoles(approval: PhaseApprovalRecord | undefined): GateSignoffRole[] {
-  if (isPhaseFullyApproved(approval)) return [];
-  const signoffs = approval?.signoffs ?? {};
-  if (!approval?.signoffs && approval?.approvedAt) return [];
-  return GATE_SIGNOFF_ROLES.filter((role) => !signoffs[role]?.approvedAt);
+export function getPendingSignoffRoles(_approval: PhaseApprovalRecord | undefined): GateSignoffRole[] {
+  return [];
 }
 
 export function isToolComplete(status: ToolStatus): boolean {
@@ -259,14 +254,7 @@ export function computePhaseGate(
   const totalCount = items.length;
   const percent = totalCount > 0 ? Math.round((completedCount / totalCount) * 100) : 0;
   const requirementsMet = completedCount === totalCount;
-  const pendingSignoffs = getPendingSignoffRoles(approval);
-  const signoffs = GATE_SIGNOFF_ROLES.map((role) => ({
-    role,
-    labelKey: `pmo.lifecycle.signoff.${role}`,
-    complete: !!approval?.signoffs?.[role]?.approvedAt,
-    approvedAt: approval?.signoffs?.[role]?.approvedAt,
-    approvedByName: approval?.signoffs?.[role]?.approvedByName,
-  }));
+  const approvedByName = approval?.approvedByName ?? approval?.signoffs?.pmo?.approvedByName;
 
   return {
     phase,
@@ -277,8 +265,8 @@ export function computePhaseGate(
     requirementsMet,
     canApprove: requirementsMet && !fullyApproved,
     approved: fullyApproved,
-    pendingSignoffs,
-    signoffs,
+    approvedByName: fullyApproved ? approvedByName : undefined,
+    approvedAt: approval?.approvedAt,
     approval,
   };
 }
