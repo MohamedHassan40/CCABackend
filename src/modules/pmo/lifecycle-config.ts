@@ -195,6 +195,38 @@ export function evaluateToolStatus(
   }
 }
 
+export const GATE_SIGNOFF_ROLES = ['sponsor', 'pmo'] as const;
+export type GateSignoffRole = (typeof GATE_SIGNOFF_ROLES)[number];
+
+export type PhaseApprovalRecord = {
+  approvedAt?: string;
+  approvedBy?: string;
+  approvedByName?: string;
+  readyNotifiedAt?: string;
+  signoffs?: Partial<
+    Record<GateSignoffRole, { approvedAt: string; approvedBy: string; approvedByName?: string }>
+  >;
+};
+
+function getPhaseApproval(approvals: unknown, phase: PmoPhase): PhaseApprovalRecord | undefined {
+  return asRecord(approvals)[phase] as PhaseApprovalRecord | undefined;
+}
+
+export function isPhaseFullyApproved(approval: PhaseApprovalRecord | undefined): boolean {
+  if (!approval) return false;
+  if (approval.approvedAt && !approval.signoffs) return true;
+  const signoffs = approval.signoffs ?? {};
+  if (Object.keys(signoffs).length === 0 && approval.approvedAt) return true;
+  return GATE_SIGNOFF_ROLES.every((role) => !!signoffs[role]?.approvedAt);
+}
+
+export function getPendingSignoffRoles(approval: PhaseApprovalRecord | undefined): GateSignoffRole[] {
+  if (isPhaseFullyApproved(approval)) return [];
+  const signoffs = approval?.signoffs ?? {};
+  if (!approval?.signoffs && approval?.approvedAt) return [];
+  return GATE_SIGNOFF_ROLES.filter((role) => !signoffs[role]?.approvedAt);
+}
+
 export function isToolComplete(status: ToolStatus): boolean {
   return status === 'completed' || status === 'under_review';
 }
@@ -207,7 +239,8 @@ export function computePhaseGate(
 ) {
   const requirements = PHASE_GATE_REQUIREMENTS[phase];
   const manual = asRecord(manualChecklist)[phase] as Record<string, boolean> | undefined;
-  const approval = asRecord(approvals)[phase] as { approvedAt?: string } | undefined;
+  const approval = getPhaseApproval(approvals, phase);
+  const fullyApproved = isPhaseFullyApproved(approval);
 
   const items = requirements.map((key) => {
     const tool = PMO_PHASE_TOOLS[phase].find((t) => t.key === key);
@@ -225,7 +258,15 @@ export function computePhaseGate(
   const completedCount = items.filter((i) => i.completed).length;
   const totalCount = items.length;
   const percent = totalCount > 0 ? Math.round((completedCount / totalCount) * 100) : 0;
-  const canApprove = completedCount === totalCount && !approval?.approvedAt;
+  const requirementsMet = completedCount === totalCount;
+  const pendingSignoffs = getPendingSignoffRoles(approval);
+  const signoffs = GATE_SIGNOFF_ROLES.map((role) => ({
+    role,
+    labelKey: `pmo.lifecycle.signoff.${role}`,
+    complete: !!approval?.signoffs?.[role]?.approvedAt,
+    approvedAt: approval?.signoffs?.[role]?.approvedAt,
+    approvedByName: approval?.signoffs?.[role]?.approvedByName,
+  }));
 
   return {
     phase,
@@ -233,8 +274,11 @@ export function computePhaseGate(
     completedCount,
     totalCount,
     percent,
-    canApprove,
-    approved: !!approval?.approvedAt,
+    requirementsMet,
+    canApprove: requirementsMet && !fullyApproved,
+    approved: fullyApproved,
+    pendingSignoffs,
+    signoffs,
     approval,
   };
 }
@@ -285,10 +329,12 @@ export function getPhaseIndex(phase: PmoPhase): number {
 export function canViewPhase(
   phase: PmoPhase,
   currentLifecyclePhase: PmoPhase,
-  phaseApprovals: Record<string, { approvedAt?: string }> | null | undefined,
+  phaseApprovals: unknown,
 ): boolean {
   const targetIdx = getPhaseIndex(phase);
   const currentIdx = getPhaseIndex(currentLifecyclePhase);
   if (targetIdx <= currentIdx) return true;
-  return !!phaseApprovals?.[phase]?.approvedAt;
+  const prev = PMO_PHASES[targetIdx - 1];
+  if (!prev) return false;
+  return isPhaseFullyApproved(getPhaseApproval(phaseApprovals, prev));
 }

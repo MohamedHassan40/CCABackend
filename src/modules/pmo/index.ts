@@ -133,6 +133,27 @@ export const pmoManifest: ModuleManifest = {
       apiPath: '/api/pmo/widgets/overdue-tasks',
       permission: 'pmo.tasks.view',
     },
+    {
+      id: 'pmo-avg-progress',
+      title: 'Avg. Project Progress',
+      description: 'Average completion across portfolio',
+      apiPath: '/api/pmo/widgets/avg-progress',
+      permission: 'pmo.projects.view',
+    },
+    {
+      id: 'pmo-pending-changes',
+      title: 'Pending Changes',
+      description: 'Open change requests',
+      apiPath: '/api/pmo/widgets/pending-changes',
+      permission: 'pmo.projects.view',
+    },
+    {
+      id: 'pmo-delayed-projects',
+      title: 'Delayed Projects',
+      description: 'Projects past end date',
+      apiPath: '/api/pmo/widgets/delayed-projects',
+      permission: 'pmo.projects.view',
+    },
   ],
 };
 
@@ -2223,6 +2244,62 @@ router.get('/widgets/overdue-tasks', requirePermission('pmo.tasks.view'), async 
     res.json({ count });
   } catch (error) {
     console.error('Error fetching overdue tasks count:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+router.get('/widgets/avg-progress', requirePermission('pmo.projects.view'), async (req, res) => {
+  try {
+    if (!req.org || !req.user) return res.status(401).json({ error: 'Unauthorized' });
+    const listWhere = await getProjectListWhere(req);
+    if (!listWhere) return res.status(401).json({ error: 'Unauthorized' });
+    const projects = await prisma.project.findMany({
+      where: { orgId: req.org.id, ...(listWhere.id ? { id: listWhere.id } : {}) },
+      select: { progress: true },
+    });
+    const avg =
+      projects.length > 0
+        ? Math.round(projects.reduce((s, p) => s + (p.progress || 0), 0) / projects.length)
+        : 0;
+    res.json({ count: avg, label: `${avg}%` });
+  } catch (error) {
+    console.error('Error fetching avg progress:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+router.get('/widgets/pending-changes', requirePermission('pmo.projects.view'), async (req, res) => {
+  try {
+    if (!req.org || !req.user) return res.status(401).json({ error: 'Unauthorized' });
+    const listWhere = await getProjectListWhere(req);
+    if (!listWhere) return res.status(401).json({ error: 'Unauthorized' });
+    const count = await prisma.projectChangeRequest.count({
+      where: { status: 'pending', project: { orgId: req.org.id, ...(listWhere.id ? { id: listWhere.id } : {}) } },
+    });
+    res.json({ count });
+  } catch (error) {
+    console.error('Error fetching pending changes:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+router.get('/widgets/delayed-projects', requirePermission('pmo.projects.view'), async (req, res) => {
+  try {
+    if (!req.org || !req.user) return res.status(401).json({ error: 'Unauthorized' });
+    const listWhere = await getProjectListWhere(req);
+    if (!listWhere) return res.status(401).json({ error: 'Unauthorized' });
+    const now = new Date();
+    const count = await prisma.project.count({
+      where: {
+        orgId: req.org.id,
+        ...(listWhere.id ? { id: listWhere.id } : {}),
+        endDate: { lt: now },
+        status: { notIn: ['completed', 'cancelled'] },
+      },
+    });
+    res.json({ count });
+  } catch (error) {
+    console.error('Error fetching delayed projects:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 });

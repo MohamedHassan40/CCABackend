@@ -5,6 +5,8 @@ import { getProjectListWhere, requireProjectAccess } from './project-access';
 import {
   PMO_PHASES,
   type PmoPhase,
+  type GateSignoffRole,
+  type PhaseApprovalRecord,
   computePhaseGate,
   computePhaseProgress,
   evaluateToolStatus,
@@ -13,7 +15,21 @@ import {
   canViewPhase,
   nextPhase,
   prevPhase,
+  isPhaseFullyApproved,
+  getPendingSignoffRoles,
 } from './lifecycle-config';
+import {
+  notifyGateReadyForApproval,
+  notifyGateSignoff,
+  notifyGateBlocked,
+  notifyChangeRequestSubmitted,
+  notifyChangeRequestDecision,
+  isUserProjectSponsor,
+} from './pmo-notifications';
+import { hasOrgPmoEditAccess } from './project-access';
+import { generateExecutiveSummaryPdf, generateClosureCertificatePdf, generateProjectReportPdf } from './pmo-pdf';
+import { importTasksFromCsv, importMilestonesFromCsv } from './pmo-import';
+import { cloneProject } from './pmo-clone';
 
 function escapeCsv(val: unknown): string {
   const s = val == null ? '' : String(val);
@@ -55,6 +71,37 @@ function getOrgDisabledTools(pmoSettings: unknown): string[] {
 function getProjectEnabledTools(raw: unknown): string[] | null {
   const val = (raw && typeof raw === 'object' ? raw : null) as { enabled?: string[] } | null;
   return Array.isArray(val?.enabled) ? val!.enabled : null;
+}
+
+async function resolveUserSignoffRoles(userId: string, projectId: string): Promise<GateSignoffRole[]> {
+  const roles: GateSignoffRole[] = [];
+  if (await isUserProjectSponsor(userId, projectId)) roles.push('sponsor');
+  return roles;
+}
+
+async function maybeNotifyGateReady(
+  orgId: string,
+  projectId: string,
+  projectName: string,
+  phase: PmoPhase,
+  project: Parameters<typeof computePhaseGate>[1],
+  manualChecklist: unknown,
+  phaseGateApprovals: Record<string, PhaseApprovalRecord>,
+): Promise<Record<string, PhaseApprovalRecord>> {
+  const gate = computePhaseGate(phase, project, manualChecklist, phaseGateApprovals);
+  const approval = phaseGateApprovals[phase] ?? {};
+  if (gate.requirementsMet && !isPhaseFullyApproved(approval) && !approval.readyNotifiedAt) {
+    await notifyGateReadyForApproval(orgId, projectId, projectName, phase);
+    return {
+      ...phaseGateApprovals,
+      [phase]: { ...approval, readyNotifiedAt: new Date().toISOString() },
+    };
+  }
+  if (!gate.requirementsMet && approval.readyNotifiedAt) {
+    const { readyNotifiedAt: _, ...rest } = approval;
+    return { ...phaseGateApprovals, [phase]: rest };
+  }
+  return phaseGateApprovals;
 }
 
 export function registerPmoLifecycleRoutes(router: Router): void {
@@ -586,7 +633,7 @@ export function registerPmoLifecycleRoutes(router: Router): void {
       const phases = PMO_PHASES.map((p) => ({
         key: p,
         progress: computePhaseProgress(p, project),
-        approved: !!approvals?.[p]?.approvedAt,
+        approved: isPhaseFullyApproved(approvals?.[p] as PhaseApprovalRecord | undefined),
         isCurrent: p === currentLifecyclePhase,
         locked: !canViewPhase(p, currentLifecyclePhase, approvals),
       }));
@@ -605,6 +652,13 @@ export function registerPmoLifecycleRoutes(router: Router): void {
         project.phaseGateApprovals,
       );
 
+      const userSignoffRoles: GateSignoffRole[] = req.user
+        ? await resolveUserSignoffRoles(req.user.id, id)
+        : [];
+      if (req.user && (await hasOrgPmoEditAccess(req))) {
+        if (!userSignoffRoles.includes('pmo')) userSignoffRoles.push('pmo');
+      }
+
       res.json({
         lifecyclePhase: currentLifecyclePhase,
         viewPhase: phase,
@@ -613,6 +667,7 @@ export function registerPmoLifecycleRoutes(router: Router): void {
         availableOptionalTools,
         allowedTabs: [...new Set(visibleTools.map((t) => t.tab))],
         gate,
+        userSignoffRoles,
         designData: project.designData ?? {},
         enabledOptionalTools: enabledProjectTools ?? [],
         nextPhase: nextPhase(phase),
@@ -645,6 +700,7 @@ export function registerPmoLifecycleRoutes(router: Router): void {
         checklistValue,
         phase: viewPhase,
         toolKey,
+        signoffRole,
       } = req.body;
 
       const project = await loadProjectForLifecycle(id, req.org.id);
@@ -660,10 +716,7 @@ export function registerPmoLifecycleRoutes(router: Router): void {
       const phaseForAction =
         viewPhase && PMO_PHASES.includes(viewPhase as PmoPhase) ? (viewPhase as PmoPhase) : currentPhase;
 
-      let phaseGateApprovals = (project.phaseGateApprovals ?? {}) as Record<
-        string,
-        { approvedAt?: string; approvedBy?: string; approvedByName?: string }
-      >;
+      let phaseGateApprovals = (project.phaseGateApprovals ?? {}) as Record<string, PhaseApprovalRecord>;
       let nextLifecyclePhase = currentPhase;
       let manualChecklist = project.phaseGateChecklist;
       let optionalToolsUpdate: string[] | undefined;
@@ -679,20 +732,62 @@ export function registerPmoLifecycleRoutes(router: Router): void {
           return;
         }
         const gate = computePhaseGate(currentPhase, project, manualChecklist, phaseGateApprovals);
-        if (!gate.canApprove) {
+        if (!gate.requirementsMet) {
+          await notifyGateBlocked(
+            req.org.id,
+            id,
+            project.name,
+            currentPhase,
+            req.user.name ?? req.user.email ?? 'User',
+          );
           res.status(400).json({ error: 'Cannot approve phase: mandatory requirements incomplete' });
           return;
         }
-        phaseGateApprovals = {
-          ...phaseGateApprovals,
-          [currentPhase]: {
+
+        const role = (signoffRole as GateSignoffRole) || null;
+        const isSponsor = await isUserProjectSponsor(req.user.id, id);
+        const isPmo = await hasOrgPmoEditAccess(req);
+        if (!role || (role === 'sponsor' && !isSponsor) || (role === 'pmo' && !isPmo)) {
+          res.status(403).json({ error: 'Not authorized for this sign-off role' });
+          return;
+        }
+
+        const existing = phaseGateApprovals[currentPhase] ?? {};
+        if (existing.signoffs?.[role]?.approvedAt) {
+          res.status(400).json({ error: 'You have already signed off for this role' });
+          return;
+        }
+
+        const signoffs = {
+          ...(existing.signoffs ?? {}),
+          [role]: {
             approvedAt: new Date().toISOString(),
             approvedBy: req.user.id,
             approvedByName: req.user.name ?? req.user.email,
           },
         };
-        const nxt = nextPhase(currentPhase);
-        if (nxt) nextLifecyclePhase = nxt;
+        const updatedApproval: PhaseApprovalRecord = { ...existing, signoffs };
+        const fullyApproved = isPhaseFullyApproved(updatedApproval);
+
+        if (fullyApproved) {
+          updatedApproval.approvedAt = new Date().toISOString();
+          updatedApproval.approvedBy = req.user.id;
+          updatedApproval.approvedByName = req.user.name ?? req.user.email;
+          const nxt = nextPhase(currentPhase);
+          if (nxt) nextLifecyclePhase = nxt;
+        }
+
+        phaseGateApprovals = { ...phaseGateApprovals, [currentPhase]: updatedApproval };
+
+        await notifyGateSignoff(
+          req.org.id,
+          id,
+          project.name,
+          currentPhase,
+          role,
+          req.user.name ?? req.user.email ?? 'User',
+          fullyApproved,
+        );
       } else if (action === 'set_checklist' && checklistItem) {
         const existing = (manualChecklist && typeof manualChecklist === 'object' ? manualChecklist : {}) as Record<
           string,
@@ -711,6 +806,18 @@ export function registerPmoLifecycleRoutes(router: Router): void {
 
       if (enabledOptionalTools !== undefined && Array.isArray(enabledOptionalTools)) {
         optionalToolsUpdate = enabledOptionalTools.map(String);
+      }
+
+      if (action !== 'approve_gate') {
+        phaseGateApprovals = await maybeNotifyGateReady(
+          req.org.id,
+          id,
+          project.name,
+          currentPhase,
+          project,
+          manualChecklist ?? project.phaseGateChecklist,
+          phaseGateApprovals,
+        );
       }
 
       const updated = await prisma.project.update({
@@ -811,7 +918,8 @@ export function registerPmoLifecycleRoutes(router: Router): void {
             not_started: tasks.filter((t) => t.status === 'draft' || t.status === 'submitted'),
             in_progress: tasks.filter((t) => t.status === 'in_progress'),
             review: tasks.filter((t) => t.status === 'review'),
-            on_hold: tasks.filter((t) => t.status === 'cancelled'),
+            on_hold: tasks.filter((t) => t.status === 'on_hold'),
+            cancelled: tasks.filter((t) => t.status === 'cancelled'),
             completed: tasks.filter((t) => t.status === 'completed'),
           },
           summary: {
@@ -865,7 +973,7 @@ export function registerPmoLifecycleRoutes(router: Router): void {
         if (!req.org || !req.user) return res.status(401).json({ error: 'Unauthorized' });
         const { id } = req.params;
         if (!(await requireProjectAccess(req, res, id))) return;
-        const { title, description, priority, impact } = req.body;
+        const { title, description, priority, impact, budgetImpactCents, scopeImpact, scheduleImpactDays } = req.body;
         if (!title) return res.status(400).json({ error: 'Title is required' });
         const row = await prisma.projectChangeRequest.create({
           data: {
@@ -874,10 +982,23 @@ export function registerPmoLifecycleRoutes(router: Router): void {
             description: description || null,
             priority: priority || 'medium',
             impact: impact || null,
+            budgetImpactCents: budgetImpactCents != null ? Number(budgetImpactCents) : null,
+            scopeImpact: scopeImpact || null,
+            scheduleImpactDays: scheduleImpactDays != null ? Number(scheduleImpactDays) : null,
             requestedById: req.user.id,
             requestedByName: req.user.name ?? req.user.email,
           },
         });
+        const project = await prisma.project.findUnique({ where: { id }, select: { name: true } });
+        if (project) {
+          await notifyChangeRequestSubmitted(
+            req.org.id,
+            id,
+            project.name,
+            title,
+            req.user.name ?? req.user.email ?? 'User',
+          );
+        }
         res.status(201).json(row);
       } catch (error) {
         console.error('Change request create error:', error);
@@ -886,7 +1007,7 @@ export function registerPmoLifecycleRoutes(router: Router): void {
     },
   );
 
-  router.put('/change-requests/:id', requirePermission('pmo.projects.edit'), async (req: Request, res: Response) => {
+  router.put('/change-requests/:id', requirePermission('pmo.projects.view'), async (req: Request, res: Response) => {
     try {
       if (!req.org || !req.user) return res.status(401).json({ error: 'Unauthorized' });
       const { id } = req.params;
@@ -897,24 +1018,73 @@ export function registerPmoLifecycleRoutes(router: Router): void {
       if (!existing || existing.project.orgId !== req.org.id) {
         return res.status(404).json({ error: 'Change request not found' });
       }
-      const { title, description, status, priority, impact, rejectionReason } = req.body;
+      const { title, description, status, priority, impact, rejectionReason, action, budgetImpactCents, scopeImpact, scheduleImpactDays } =
+        req.body;
       const data: Record<string, unknown> = {};
       if (title) data.title = title;
       if (description !== undefined) data.description = description;
       if (priority) data.priority = priority;
       if (impact !== undefined) data.impact = impact;
-      if (status) {
-        data.status = status;
-        if (status === 'approved') {
-          data.approvedAt = new Date();
-          data.approvedById = req.user.id;
-          data.approvedByName = req.user.name ?? req.user.email;
-        }
-        if (status === 'rejected') {
-          data.rejectedAt = new Date();
-          data.rejectionReason = rejectionReason || null;
-        }
+      if (budgetImpactCents !== undefined) data.budgetImpactCents = budgetImpactCents != null ? Number(budgetImpactCents) : null;
+      if (scopeImpact !== undefined) data.scopeImpact = scopeImpact;
+      if (scheduleImpactDays !== undefined) data.scheduleImpactDays = scheduleImpactDays != null ? Number(scheduleImpactDays) : null;
+
+      const actorName = req.user.name ?? req.user.email ?? 'User';
+      const isSponsor = await isUserProjectSponsor(req.user.id, existing.projectId);
+      const isPmo = await hasOrgPmoEditAccess(req);
+
+      if (action === 'sponsor_approve' && existing.status === 'pending') {
+        if (!isSponsor) return res.status(403).json({ error: 'Only project sponsors can approve at this stage' });
+        data.sponsorApprovedAt = new Date();
+        data.sponsorApprovedById = req.user.id;
+        data.sponsorApprovedByName = actorName;
+        await notifyChangeRequestDecision(
+          req.org.id,
+          existing.projectId,
+          existing.project.name,
+          existing.title,
+          'sponsor_approved',
+          actorName,
+          existing.requestedById,
+        );
+      } else if (action === 'pmo_approve' && existing.status === 'pending' && existing.sponsorApprovedAt) {
+        if (!isPmo) return res.status(403).json({ error: 'PMO approval required' });
+        data.pmoApprovedAt = new Date();
+        data.pmoApprovedById = req.user.id;
+        data.pmoApprovedByName = actorName;
+        data.status = 'approved';
+        data.approvedAt = new Date();
+        data.approvedById = req.user.id;
+        data.approvedByName = actorName;
+        await notifyChangeRequestDecision(
+          req.org.id,
+          existing.projectId,
+          existing.project.name,
+          existing.title,
+          'approved',
+          actorName,
+          existing.requestedById,
+        );
+      } else if (action === 'reject' || status === 'rejected') {
+        if (!isSponsor && !isPmo) return res.status(403).json({ error: 'Not authorized to reject' });
+        data.status = 'rejected';
+        data.rejectedAt = new Date();
+        data.rejectionReason = rejectionReason || null;
+        await notifyChangeRequestDecision(
+          req.org.id,
+          existing.projectId,
+          existing.project.name,
+          existing.title,
+          'rejected',
+          actorName,
+          existing.requestedById,
+        );
+      } else if (status === 'implemented' && isPmo) {
+        data.status = 'implemented';
+      } else if (status === 'approved') {
+        return res.status(400).json({ error: 'Use sponsor_approve and pmo_approve actions' });
       }
+
       const updated = await prisma.projectChangeRequest.update({ where: { id }, data });
       res.json(updated);
     } catch (error) {
@@ -938,6 +1108,164 @@ export function registerPmoLifecycleRoutes(router: Router): void {
       res.json({ message: 'Deleted' });
     } catch (error) {
       console.error('Change request delete error:', error);
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+
+  // POST /api/pmo/projects/:id/clone
+  router.post('/projects/:id/clone', requirePermission('pmo.projects.create'), async (req: Request, res: Response) => {
+    try {
+      if (!req.org) return res.status(401).json({ error: 'Unauthorized' });
+      const { id } = req.params;
+      if (!(await requireProjectAccess(req, res, id))) return;
+      const { name, includeCharter, includeStakeholders, includeRaci, includePlans, includeDeliverables, includeDesignData } =
+        req.body;
+      if (!name) return res.status(400).json({ error: 'Name is required' });
+      const cloned = await cloneProject(id, req.org.id, {
+        name,
+        includeCharter,
+        includeStakeholders,
+        includeRaci,
+        includePlans,
+        includeDeliverables,
+        includeDesignData,
+      });
+      res.status(201).json(cloned);
+    } catch (error) {
+      console.error('Project clone error:', error);
+      res.status(500).json({ error: error instanceof Error ? error.message : 'Internal server error' });
+    }
+  });
+
+  // POST /api/pmo/projects/:id/tasks/import
+  router.post('/projects/:id/tasks/import', requirePermission('pmo.tasks.create'), async (req: Request, res: Response) => {
+    try {
+      if (!req.org || !req.user) return res.status(401).json({ error: 'Unauthorized' });
+      const { id } = req.params;
+      if (!(await requireProjectAccess(req, res, id))) return;
+      const { csv } = req.body;
+      if (!csv || typeof csv !== 'string') return res.status(400).json({ error: 'CSV text required' });
+      const result = await importTasksFromCsv(id, req.org.id, req.user.id, csv);
+      res.json(result);
+    } catch (error) {
+      console.error('Task import error:', error);
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+
+  // POST /api/pmo/projects/:id/milestones/import
+  router.post('/projects/:id/milestones/import', requirePermission('pmo.projects.edit'), async (req: Request, res: Response) => {
+    try {
+      if (!req.org) return res.status(401).json({ error: 'Unauthorized' });
+      const { id } = req.params;
+      if (!(await requireProjectAccess(req, res, id))) return;
+      const { csv } = req.body;
+      if (!csv || typeof csv !== 'string') return res.status(400).json({ error: 'CSV text required' });
+      const result = await importMilestonesFromCsv(id, csv);
+      res.json(result);
+    } catch (error) {
+      console.error('Milestone import error:', error);
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+
+  // GET /api/pmo/projects/:id/export/pdf?type=executive|closure|report&reportKind=executive|financial|final
+  router.get('/projects/:id/export/pdf', requirePermission('pmo.projects.view'), async (req: Request, res: Response) => {
+    try {
+      if (!req.org) return res.status(401).json({ error: 'Unauthorized' });
+      const { id } = req.params;
+      if (!(await requireProjectAccess(req, res, id))) return;
+      const type = String(req.query.type || 'executive');
+      const org = await prisma.organization.findUnique({ where: { id: req.org.id }, select: { name: true } });
+
+      const project = await prisma.project.findFirst({
+        where: { id, orgId: req.org.id },
+        include: { closure: true },
+      });
+      if (!project) return res.status(404).json({ error: 'Project not found' });
+
+      let pdf: Buffer;
+      let filename = `${project.name.replace(/[^a-z0-9]/gi, '-')}.pdf`;
+
+      if (type === 'closure') {
+        const certNumber = project.closure?.certificateNumber ?? `CERT-${id.slice(-6).toUpperCase()}`;
+        pdf = await generateClosureCertificatePdf({
+          projectName: project.name,
+          orgName: org?.name ?? 'Organization',
+          certificateNumber: certNumber,
+          generatedAt: project.closure?.certificateGeneratedAt ?? new Date(),
+          finalReport: project.closure?.finalReport,
+        });
+        filename = `${filename.replace('.pdf', '')}-certificate.pdf`;
+      } else if (type === 'report') {
+        const reportKind = String(req.query.reportKind || 'executive');
+        let report: Record<string, unknown> = {};
+        if (reportKind === 'financial') {
+          const budgets = await prisma.budget.findMany({ where: { projectId: id } });
+          report = { budgets, spentCents: project.spentCents, budgetCents: project.budgetCents };
+        } else if (reportKind === 'final') {
+          report = { finalReport: project.closure?.finalReport, lessonsSummary: project.closure?.lessonsSummary };
+        } else {
+          const tasks = await prisma.projectTask.count({ where: { projectId: id } });
+          report = { progress: project.progress, taskCount: tasks, status: project.status };
+        }
+        pdf = await generateProjectReportPdf({
+          projectName: project.name,
+          orgName: org?.name ?? 'Organization',
+          reportType: reportKind,
+          report,
+        });
+        filename = `${filename.replace('.pdf', '')}-${reportKind}-report.pdf`;
+      } else {
+        const [deliverables, tasks] = await Promise.all([
+          prisma.deliverable.findMany({ where: { projectId: id } }),
+          prisma.projectTask.findMany({ where: { projectId: id }, include: { assignee: { select: { fullName: true } } } }),
+        ]);
+        const items = [
+          ...deliverables.map((d) => ({
+            name: d.name,
+            type: 'deliverable',
+            progress: d.status === 'completed' ? 100 : 50,
+            status: d.status,
+            responsible: d.assignedTo,
+          })),
+          ...tasks.map((t) => ({
+            name: t.title,
+            type: 'task',
+            progress: t.status === 'completed' ? 100 : 0,
+            status: t.status,
+            responsible: t.assignee?.fullName ?? null,
+          })),
+        ];
+        const totalTasks = tasks.length;
+        const avgCompletion = items.length
+          ? Math.round(items.reduce((s, i) => s + i.progress, 0) / items.length)
+          : 0;
+        pdf = await generateExecutiveSummaryPdf({
+          projectName: project.name,
+          orgName: org?.name ?? 'Organization',
+          summary: {
+            totalTasks,
+            totalOutputs: deliverables.length,
+            avgCompletion,
+            spendPercent:
+              project.budgetCents && project.budgetCents > 0
+                ? Math.round((project.spentCents / project.budgetCents) * 100)
+                : 0,
+            budgetCents: project.budgetCents,
+            spentCents: project.spentCents,
+            currency: project.currency,
+          },
+          items,
+        });
+        filename = `${filename.replace('.pdf', '')}-executive.pdf`;
+      }
+
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+      res.send(pdf);
+    } catch (error) {
+      console.error('PMO PDF export error:', error);
       res.status(500).json({ error: 'Internal server error' });
     }
   });

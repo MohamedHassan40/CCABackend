@@ -1508,14 +1508,23 @@ model ProjectChangeRequest {
   description      String?
   status           String    @default("pending") // pending, approved, rejected, implemented
   priority         String    @default("medium")
-  impact           String?
-  requestedById    String?
-  requestedByName  String?
-  approvedById     String?
-  approvedByName   String?
-  approvedAt       DateTime?
-  rejectedAt       DateTime?
-  rejectionReason  String?
+  impact               String?
+  budgetImpactCents    Int?
+  scopeImpact          String?
+  scheduleImpactDays   Int?
+  requestedById        String?
+  requestedByName      String?
+  sponsorApprovedAt    DateTime?
+  sponsorApprovedById  String?
+  sponsorApprovedByName String?
+  pmoApprovedAt        DateTime?
+  pmoApprovedById      String?
+  pmoApprovedByName    String?
+  approvedById         String?
+  approvedByName       String?
+  approvedAt           DateTime?
+  rejectedAt           DateTime?
+  rejectionReason      String?
 
   project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
 
@@ -2443,6 +2452,10 @@ model MembershipCardDesign {
   customCss   String? // Optional CSS overrides (sanitized on use)
   fontFamily  String?  @default("sans-serif") // e.g. "Inter", "sans-serif"
   fontColor   String?  @default("#ffffff") // Text color on the card (hex)
+  templateUrl     String? // Background template image URL
+  templateWidth   Int?    @default(856) // Reference width in px for layout coordinates
+  templateHeight  Int?    @default(540) // Reference height in px for layout coordinates
+  elementLayout   Json?   // Per-field placement: { memberName: { x, y, fontSize, ... }, ... }
 
   organization Organization       @relation(fields: [orgId], references: [id], onDelete: Cascade)
   memberships  MemberMembership[]

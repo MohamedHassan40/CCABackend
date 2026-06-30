@@ -81,6 +81,101 @@ async function resolveOrgCardDesignId(orgId: string, cardDesignId: unknown): Pro
   return row?.id ?? null;
 }
 
+function cardDesignInputFromBody(body: Record<string, unknown>) {
+  const elementLayout = body.elementLayout;
+  return {
+    ...(body.name !== undefined && { name: body.name as string }),
+    ...(body.isDefault !== undefined && { isDefault: body.isDefault === true }),
+    ...(body.layout !== undefined && { layout: (body.layout as string) || 'standard' }),
+    ...(body.primaryColor !== undefined && { primaryColor: (body.primaryColor as string) || '#1e3a5f' }),
+    ...(body.secondaryColor !== undefined && { secondaryColor: (body.secondaryColor as string) || '#3b82f6' }),
+    ...(body.accentColor !== undefined && { accentColor: (body.accentColor as string) || null }),
+    ...(body.logoUrl !== undefined && { logoUrl: (body.logoUrl as string) || null }),
+    ...(body.showQR !== undefined && { showQR: body.showQR !== false }),
+    ...(body.qrPosition !== undefined && { qrPosition: (body.qrPosition as string) || 'right' }),
+    ...(body.showMemberId !== undefined && { showMemberId: body.showMemberId !== false }),
+    ...(body.memberIdPrefix !== undefined && { memberIdPrefix: (body.memberIdPrefix as string) || null }),
+    ...(body.customCss !== undefined && { customCss: (body.customCss as string) || null }),
+    ...(body.fontFamily !== undefined && { fontFamily: (body.fontFamily as string) || 'sans-serif' }),
+    ...(body.fontColor !== undefined && { fontColor: (body.fontColor as string) || '#ffffff' }),
+    ...(body.templateUrl !== undefined && { templateUrl: (body.templateUrl as string) || null }),
+    ...(body.templateWidth !== undefined && {
+      templateWidth: typeof body.templateWidth === 'number' ? body.templateWidth : Number(body.templateWidth) || 856,
+    }),
+    ...(body.templateHeight !== undefined && {
+      templateHeight: typeof body.templateHeight === 'number' ? body.templateHeight : Number(body.templateHeight) || 540,
+    }),
+    ...(elementLayout !== undefined && {
+      elementLayout:
+        elementLayout == null || elementLayout === ''
+          ? null
+          : (elementLayout as Prisma.InputJsonValue),
+    }),
+  };
+}
+
+function serializeCardDesign(design: {
+  id?: string;
+  name: string;
+  layout: string;
+  primaryColor: string;
+  secondaryColor: string;
+  accentColor: string | null;
+  logoUrl: string | null;
+  showQR: boolean;
+  qrPosition: string;
+  showMemberId: boolean;
+  memberIdPrefix: string | null;
+  customCss?: string | null;
+  fontFamily: string | null;
+  fontColor: string | null;
+  templateUrl?: string | null;
+  templateWidth?: number | null;
+  templateHeight?: number | null;
+  elementLayout?: unknown;
+}) {
+  return {
+    ...(design.id ? { id: design.id } : {}),
+    name: design.name,
+    layout: design.layout,
+    primaryColor: design.primaryColor,
+    secondaryColor: design.secondaryColor,
+    accentColor: design.accentColor,
+    logoUrl: design.logoUrl,
+    showQR: design.showQR,
+    qrPosition: design.qrPosition,
+    showMemberId: design.showMemberId,
+    memberIdPrefix: design.memberIdPrefix,
+    customCss: design.customCss ?? null,
+    fontFamily: design.fontFamily,
+    fontColor: design.fontColor,
+    templateUrl: design.templateUrl ?? null,
+    templateWidth: design.templateWidth ?? 856,
+    templateHeight: design.templateHeight ?? 540,
+    elementLayout: design.elementLayout ?? null,
+  };
+}
+
+const DEFAULT_CARD_DESIGN = serializeCardDesign({
+  name: 'Default',
+  layout: 'standard',
+  primaryColor: '#1e3a5f',
+  secondaryColor: '#3b82f6',
+  accentColor: null,
+  logoUrl: null,
+  showQR: true,
+  qrPosition: 'right',
+  showMemberId: true,
+  memberIdPrefix: null,
+  customCss: null,
+  fontFamily: 'sans-serif',
+  fontColor: '#ffffff',
+  templateUrl: null,
+  templateWidth: 856,
+  templateHeight: 540,
+  elementLayout: null,
+});
+
 async function notifyMembersOfPublishedAnnouncement(
   orgId: string,
   ann: {
@@ -527,7 +622,7 @@ router.post('/card-designs', requirePermission('membership.types.create'), async
       res.status(401).json({ error: 'Unauthorized' });
       return;
     }
-    const { name, isDefault, layout, primaryColor, secondaryColor, accentColor, logoUrl, showQR, qrPosition, showMemberId, memberIdPrefix, customCss, fontFamily, fontColor } = req.body;
+    const { name, isDefault, layout, primaryColor, secondaryColor, accentColor, logoUrl, showQR, qrPosition, showMemberId, memberIdPrefix, customCss, fontFamily, fontColor, templateUrl, templateWidth, templateHeight, elementLayout } = req.body;
     if (!name) {
       res.status(400).json({ error: 'Name is required' });
       return;
@@ -555,6 +650,10 @@ router.post('/card-designs', requirePermission('membership.types.create'), async
         customCss: customCss || null,
         fontFamily: fontFamily || 'sans-serif',
         fontColor: fontColor || '#ffffff',
+        templateUrl: templateUrl || null,
+        templateWidth: templateWidth != null ? Number(templateWidth) || 856 : 856,
+        templateHeight: templateHeight != null ? Number(templateHeight) || 540 : 540,
+        elementLayout: elementLayout == null || elementLayout === '' ? undefined : elementLayout,
       },
     });
     res.status(201).json(design);
@@ -579,7 +678,7 @@ router.put('/card-designs/:id', requirePermission('membership.types.edit'), asyn
       res.status(404).json({ error: 'Card design not found' });
       return;
     }
-    const { name, isDefault, layout, primaryColor, secondaryColor, accentColor, logoUrl, showQR, qrPosition, showMemberId, memberIdPrefix, customCss, fontFamily, fontColor } = req.body;
+    const { name, isDefault, layout, primaryColor, secondaryColor, accentColor, logoUrl, showQR, qrPosition, showMemberId, memberIdPrefix, customCss, fontFamily, fontColor, templateUrl, templateWidth, templateHeight, elementLayout } = req.body;
     if (isDefault === true) {
       await prisma.membershipCardDesign.updateMany({
         where: { orgId: req.org.id },
@@ -588,22 +687,26 @@ router.put('/card-designs/:id', requirePermission('membership.types.edit'), asyn
     }
     const updated = await prisma.membershipCardDesign.update({
       where: { id },
-      data: {
-        ...(name !== undefined && { name }),
-        ...(isDefault !== undefined && { isDefault }),
-        ...(layout !== undefined && { layout }),
-        ...(primaryColor !== undefined && { primaryColor }),
-        ...(secondaryColor !== undefined && { secondaryColor }),
-        ...(accentColor !== undefined && { accentColor }),
-        ...(logoUrl !== undefined && { logoUrl }),
-        ...(showQR !== undefined && { showQR }),
-        ...(qrPosition !== undefined && { qrPosition }),
-        ...(showMemberId !== undefined && { showMemberId }),
-        ...(memberIdPrefix !== undefined && { memberIdPrefix }),
-        ...(customCss !== undefined && { customCss }),
-        ...(fontFamily !== undefined && { fontFamily }),
-        ...(fontColor !== undefined && { fontColor }),
-      },
+      data: cardDesignInputFromBody({
+        name,
+        isDefault,
+        layout,
+        primaryColor,
+        secondaryColor,
+        accentColor,
+        logoUrl,
+        showQR,
+        qrPosition,
+        showMemberId,
+        memberIdPrefix,
+        customCss,
+        fontFamily,
+        fontColor,
+        templateUrl,
+        templateWidth,
+        templateHeight,
+        elementLayout,
+      }),
     });
     res.json(updated);
   } catch (error: any) {
@@ -1373,38 +1476,7 @@ router.get('/members/:id/card', requirePermission('membership.members.view'), as
         membershipType: membership.membershipType,
         organization: membership.organization,
       },
-      design: design
-        ? {
-            id: design.id,
-            name: design.name,
-            layout: design.layout,
-            primaryColor: design.primaryColor,
-            secondaryColor: design.secondaryColor,
-            accentColor: design.accentColor,
-            logoUrl: design.logoUrl,
-            showQR: design.showQR,
-            qrPosition: design.qrPosition,
-            showMemberId: design.showMemberId,
-            memberIdPrefix: design.memberIdPrefix,
-            customCss: design.customCss,
-            fontFamily: design.fontFamily,
-            fontColor: design.fontColor,
-          }
-        : {
-            name: 'Default',
-            layout: 'standard',
-            primaryColor: '#1e3a5f',
-            secondaryColor: '#3b82f6',
-            accentColor: null,
-            logoUrl: null,
-            showQR: true,
-            qrPosition: 'right',
-            showMemberId: true,
-            memberIdPrefix: null,
-            customCss: null,
-            fontFamily: 'sans-serif',
-            fontColor: '#ffffff',
-          },
+      design: design ? serializeCardDesign({ ...design, id: design.id }) : DEFAULT_CARD_DESIGN,
       verifyUrl: buildMembershipVerifyUrl(qrToken),
     });
   } catch (error: any) {

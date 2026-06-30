@@ -572,4 +572,68 @@ export const emailTemplates = {
       brand
     ),
   }),
+
+  pmoGateReady: (
+    projectName: string,
+    phaseLabel: string,
+    projectUrl: string,
+    brand?: EmailBrandConfig | null
+  ) => ({
+    subject: `Phase gate ready: ${projectName}`,
+    html: brandedShell(
+      {
+        previewText: `${phaseLabel} phase ready for sign-off`,
+        title: 'Phase gate ready for approval',
+        innerHtml: `
+          ${p(`Project <strong>${escapeHtml(projectName)}</strong>: <strong>${escapeHtml(phaseLabel)}</strong> phase requirements are complete. Sponsor and PMO sign-off required.`)}
+          ${ccaButton(projectUrl, 'Review gate')}
+        `,
+      },
+      brand
+    ),
+  }),
+
+  pmoGateSignoff: (
+    projectName: string,
+    phaseLabel: string,
+    role: string,
+    signerName: string,
+    fullyApproved: boolean,
+    projectUrl: string,
+    brand?: EmailBrandConfig | null
+  ) => ({
+    subject: fullyApproved ? `Phase approved: ${projectName}` : `Gate sign-off: ${projectName}`,
+    html: brandedShell(
+      {
+        previewText: fullyApproved ? `${phaseLabel} phase fully approved` : `${signerName} signed as ${role}`,
+        title: fullyApproved ? 'Phase gate approved' : 'Phase gate sign-off',
+        innerHtml: fullyApproved
+          ? `${p(`Project <strong>${escapeHtml(projectName)}</strong>: <strong>${escapeHtml(phaseLabel)}</strong> phase is fully approved and the project has advanced.`)}${ccaButton(projectUrl, 'View project')}`
+          : `${p(`<strong>${escapeHtml(signerName)}</strong> signed off as <strong>${escapeHtml(role)}</strong> for ${escapeHtml(phaseLabel)} phase on <strong>${escapeHtml(projectName)}</strong>.`)}${ccaButton(projectUrl, 'View gate')}`,
+      },
+      brand
+    ),
+  }),
+
+  pmoChangeRequest: (
+    projectName: string,
+    title: string,
+    event: string,
+    actorName: string,
+    projectUrl: string,
+    brand?: EmailBrandConfig | null
+  ) => ({
+    subject: `Change request: ${title}`,
+    html: brandedShell(
+      {
+        previewText: `${event} — ${title}`,
+        title: 'Change request update',
+        innerHtml: `
+          ${p(`Project <strong>${escapeHtml(projectName)}</strong>: change request <strong>${escapeHtml(title)}</strong> — ${escapeHtml(event)} by ${escapeHtml(actorName)}.`)}
+          ${ccaButton(projectUrl, 'Review change request')}
+        `,
+      },
+      brand
+    ),
+  }),
 };
