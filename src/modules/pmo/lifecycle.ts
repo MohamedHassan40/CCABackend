@@ -76,6 +76,10 @@ function getProjectEnabledTools(raw: unknown): string[] | null {
 async function resolveUserSignoffRoles(userId: string, projectId: string): Promise<GateSignoffRole[]> {
   const roles: GateSignoffRole[] = [];
   if (await isUserProjectSponsor(userId, projectId)) roles.push('sponsor');
+  const pmCount = await prisma.projectManager.count({ where: { projectId } });
+  if (pmCount === 0 && roles.length === 0) {
+    roles.push('sponsor');
+  }
   return roles;
 }
 
@@ -747,7 +751,9 @@ export function registerPmoLifecycleRoutes(router: Router): void {
         const role = (signoffRole as GateSignoffRole) || null;
         const isSponsor = await isUserProjectSponsor(req.user.id, id);
         const isPmo = await hasOrgPmoEditAccess(req);
-        if (!role || (role === 'sponsor' && !isSponsor) || (role === 'pmo' && !isPmo)) {
+        const pmCount = await prisma.projectManager.count({ where: { projectId: id } });
+        const canSignSponsor = isSponsor || (pmCount === 0 && isPmo);
+        if (!role || (role === 'sponsor' && !canSignSponsor) || (role === 'pmo' && !isPmo)) {
           res.status(403).json({ error: 'Not authorized for this sign-off role' });
           return;
         }
