@@ -108,7 +108,7 @@ function cardDesignInputFromBody(body: Record<string, unknown>) {
     ...(elementLayout !== undefined && {
       elementLayout:
         elementLayout == null || elementLayout === ''
-          ? null
+          ? Prisma.DbNull
           : (elementLayout as Prisma.InputJsonValue),
     }),
   };
